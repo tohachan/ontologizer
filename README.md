@@ -1,6 +1,41 @@
 # ontologizer
 
-A toolkit for building level-aware ontologies of software projects and comparing them. Concepts sit on the four levels of Guarino: top, domain, task and application. Every claim carries source evidence. The knowledge is stored as named graphs on a shared Open Ontologies server ([what the kit relies on](docs/open-ontologies.md)).
+A toolkit for building ontologies of software projects and using them well. Agents analyse source code and documentation; the kit turns their findings into a standard RDF/OWL ontology. Every concept sits on a level, and every claim carries evidence from the source. The ontology lives in a shared Open Ontologies store ([what the kit relies on](docs/open-ontologies.md)), where people and agents query it, check their own concepts and designs against it, keep their answers within its vocabulary, and compare projects and releases.
+
+## What it does
+
+- **Build.** A staged analysis process turns a corpus of repositories into an ontology: inventory, double extraction, reconciliation, mapping onto shared concepts, consolidation and verification, each stage with a gate and metrics ([`docs/process.md`](docs/process.md)).
+- **Validate and version.** Every write is checked with SHACL and replaces exactly one named graph. Releases freeze a set of graphs as an immutable version with its own term IRIs.
+- **Use.** SPARQL over the store (`ontologizer query`), and the agent skill [`query-ontology`](skills/query-ontology/SKILL.md) for exploring and reasoning over the ontology, checking a concept against it, and answering only in its terms. Generated markdown (`exports/`) is there for reading.
+- **Compare.** Built on finished ontologies: concept and variation matrices across projects, release-to-release comparison by meaning, and the overlay of a new project onto a released model.
+
+## Levels
+
+Concepts are placed on the four levels of Guarino (FOIS 1998):
+
+1. **Top**: the most general categories (kind, role, phase, event, relator, quality, …). These are not authored here; they come from an existing upper ontology, as is common practice. The kit uses [gUFO](http://purl.org/nemo/doc/gufo) 1.0.0, the OWL implementation of the Unified Foundational Ontology, vendored and pinned. Every concept is typed with a gUFO meta-type.
+2. **Domain**: the concepts of a subject area, shared by many projects (for example, a user, a repository or a build).
+3. **Task**: shared activities and processes (for example, reviewing a change or deploying a release), independent of a particular project.
+4. **Application**: the concepts of one project, each mapped to domain and task concepts as an equivalence, a specialization, a role, a realization or a partial overlap.
+
+Beside the levels runs a second axis, **variation**: the design dimensions on which projects differ, and the value each project chose. The levels, the allowed mappings between them and the accepted upper categories are data in a preset ([`presets/guarino-4.yaml`](presets/guarino-4.yaml)), not code.
+
+## Standards
+
+The ontology is plain W3C RDF throughout, so any RDF tool can read it:
+
+| Standard | How the kit uses it |
+| --- | --- |
+| **RDF 1.1**, named graphs | Each part of the ontology (a shared level, a project, a release) is one named graph, `urn:ontologizer:graph:<path>`. Turtle for releases and pinned sources, N-Triples on the wire |
+| **OWL 2 / RDFS** | Concepts are `owl:Class` with `rdfs:subClassOf` hierarchies; the kit vocabulary (`kit/vocab.ttl`) declares its classes and properties in OWL with RDFS domains and ranges |
+| **SKOS** | `skos:prefLabel`, `skos:altLabel` (synonyms and each project's own names) and `skos:definition` on every concept; variation dimensions are `skos:ConceptScheme`s and their values `skos:inScheme` |
+| **SHACL** | Shapes are generated from the level preset: core constraints plus SHACL-SPARQL rules (which mapping kinds may link which levels, that a mapping target exists, that a disputed claim keeps both readings). Every write is validated against the graph and its validation context before it reaches the store |
+| **SPARQL 1.1** | Query for every read (`query`, exports, the `query-ontology` skill); Update for writes, where one request replaces one graph in one transaction |
+| **PROV-O** | Evidence nodes are `prov:Entity`, and `ok:evidence` is a sub-property of `prov:wasDerivedFrom` |
+| **Dublin Core Terms** | `dcterms:isVersionOf` links a release term to its working term |
+| **gUFO (UFO)** | The top level and the meta-type of every concept |
+
+## How it works
 
 Agents never write RDF. They produce extraction JSON. The kit converts it to RDF deterministically, validates it with SHACL generated from the level preset, and writes it through a single route, one graph at a time.
 
@@ -124,7 +159,7 @@ You need:
 - an Open Ontologies v2.1.0 server at `http://127.0.0.1:8080` (`store.url`) with persistent storage; see [Server setup](docs/open-ontologies.md#server-setup). Without one, `make oo-server` clones, builds and starts it in Docker and writes the token to `.env` ([details](deps/open-ontologies/README.md)).
 
 ```sh
-git clone <this repo> ontologizer && cd ontologizer
+git clone https://github.com/tohachan/ontologizer.git && cd ontologizer
 uv sync
 cp .env.example .env                                  # set OPEN_ONTOLOGIES_TOKEN; .env is gitignored
 make oo-status                                        # is there an engine clone and a running server?
@@ -160,12 +195,21 @@ uv run --project ../ontologizer ontologizer export-md                    # → e
 | `export-graph PATH [--turtle]` / `import-graph PATH FILE.ttl` | Copies one graph out of the store / replaces one graph from a file |
 | `release PATH … VER` | Releases a set of research graphs as one immutable version `PATH@VER`. Release terms get their own IRIs (`…<path>@<ver>:<id>`, linked to the working term by `dcterms:isVersionOf`), and references inside the set follow them, so versions never mix in queries or reasoning; a reference to a working graph with no release at that version is refused. `release --migrate-iris VER` rewrites releases made before this rule |
 | `export-md` | Writes markdown for the owned graphs plus comparison views; the output is deterministic |
-| `query FILE.rq` | Runs a SPARQL SELECT over the store |
+| `query FILE.rq` / `query 'SPARQL'` | Runs a SPARQL SELECT over the store and prints one row per line |
 | `consolidation-report` / `consolidate FILE.yaml` | Reports what the extractions say about the shared levels / applies a decision file to the shared-level and application files |
+
+### Using an ontology
+
+Once an ontology is in the store, it answers questions:
+
+- **SPARQL.** `ontologizer query` runs a SELECT over all graphs; the store's REST endpoint takes SELECT, ASK and CONSTRUCT ([`docs/open-ontologies.md`](docs/open-ontologies.md)).
+- **Agents.** The skill [`query-ontology`](skills/query-ontology/SKILL.md) works in three modes: explore and reason over the concepts, relations, levels, mappings and evidence; check the user's own concept against the store and give a verdict in the kit's mapping kinds (equivalence, specialization, role, realization, partial, absent); answer, write or review a text using only the ontology's vocabulary, listing what falls outside it. It only reads, uses the working graphs unless a release is asked for, and names the slice and the analysed commits in every answer. Tested query patterns are in [`references/queries.md`](skills/query-ontology/references/queries.md).
+- **Reading.** `export-md` writes one page per level and project, plus `exports/compare/`: the concept matrix (shared concept × project) and the variation matrix (dimension × project).
+- **Comparing.** `report` ranks the projects against a study's design targets (a fit matrix of requirements × projects, with the concepts to reuse). `release-compare A B` compares two releases by meaning: which concepts were kept, renamed, split, merged, added or dropped, and why. `report --compare A B` compares two runs. Stage 9 maps a new project onto a released model and shows what it realizes and what it lacks.
 
 ### The analysis process
 
-A corpus is analysed in stages, each with a gate and metrics: [`docs/process.md`](docs/process.md). Stage 0 frames the study (skill [`frame-study`](skills/frame-study/SKILL.md)); stages 1–8 are run by the skill [`analyse-corpus`](skills/analyse-corpus/SKILL.md).
+A corpus is analysed in stages, each with a gate and metrics: [`docs/process.md`](docs/process.md). Stage 0 frames the study (skill [`frame-study`](skills/frame-study/SKILL.md)); stages 1–9 are run by the skill [`analyse-corpus`](skills/analyse-corpus/SKILL.md).
 
 | Stage | Commands |
 | --- | --- |
@@ -232,19 +276,19 @@ my-index = "my_adapters.index:factory"     # factory(conf: dict, *, base: Path) 
    ```
 
 2. Register it in `ontologizer.local.yaml` under `projects:`.
-3. Map repositories with the [`map-repo`](skills/map-repo/SKILL.md) skill.
+3. Frame the study with the [`frame-study`](skills/frame-study/SKILL.md) skill, then analyse its repositories with [`analyse-corpus`](skills/analyse-corpus/SKILL.md). A single repository mapped onto an existing release is the overlay run (stage 9).
 
 ## Layout
 
 | Path | Content |
 | --- | --- |
-| `src/ontologizer/core/` | Config cascade, levels and SHACL generation, extraction schema and converter, write route, consolidation; the process stages (`frame`, `inventory`, `brief`, `reconcile`, `mapping`, `grouping`, `verify`, `report`, `review`), runs and decisions (`run`), plugin loading (`plugins`) |
+| `src/ontologizer/core/` | Config cascade, levels and SHACL generation, extraction schema and converter, write route, consolidation; the process stages (`frame`, `inventory`, `brief`, `reconcile`, `mapping`, `grouping`, `verify`, `report`, `review`), runs and decisions (`run`), adapter loading (`plugins`) |
 | `src/ontologizer/ports/` | Engine, exporter, evidence, inventory and decision ports |
 | `src/ontologizer/adapters/` | Open Ontologies engine adapter, markdown exporter, built-in `checkout` evidence, `graphify` inventory and `jev` decision adapters |
 | `templates/` | `frame.md` (stage 0) and the extraction brief (stage 2) |
 | `presets/` | Level presets as data (`guarino-4.yaml`) |
 | `kit/vocab.ttl`, `vendor/` | Kit vocabulary (`ok:`), pinned gUFO 1.0.0 |
-| `skills/` | `frame-study` (stage 0), `analyse-corpus` (stages 1–9, release comparison, ablation), `map-repo` (lessons of the first run), `query-ontology` (read-only: explore the store, check a concept against it, answer within its vocabulary) |
+| `skills/` | `frame-study` (stage 0), `analyse-corpus` (stages 1–9, release comparison, ablation), `map-repo` (superseded by the staged process; kept as the record of the first run), `query-ontology` (read-only: explore the store, check a concept against it, answer within its vocabulary) |
 | `scripts/oo`, `scripts/engine_check.py` | Engine access helper, engine contract check |
 | `Makefile`, `deps/open-ontologies/` | Local engine server: Docker build from a clone, config (`defaults.conf`, gitignored `local.conf`) |
 | `docs/open-ontologies.md` | What the kit relies on in the engine: setup, verified behaviour, rules, backup |
