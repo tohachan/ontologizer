@@ -1,0 +1,36 @@
+[project]
+name = "ontologizer"
+version = "0.1.0"
+description = "Level-aware ontology kit over Open Ontologies"
+requires-python = ">=3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+    "pyoxigraph>=0.5.13",
+    "pyshacl>=0.40.2",
+    "pyyaml>=6.0.3",
+    "rdflib>=7.6.0",
+]
+
+[project.scripts]
+ontologizer = "ontologizer.cli:main"
+
+# Built-in adapters: standard library only, active only when a config names them.
+# Adapter packages add more by declaring the same groups (src/ontologizer/core/plugins.py).
+[project.entry-points."ontologizer.evidence"]
+checkout = "ontologizer.adapters.evidence.checkout:factory"
+
+[project.entry-points."ontologizer.inventory"]
+graphify = "ontologizer.adapters.inventory.graphify:factory"
+
+[project.entry-points."ontologizer.decisions"]
+jev = "ontologizer.adapters.decisions.jev:factory"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

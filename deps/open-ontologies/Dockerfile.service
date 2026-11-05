@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+# Build only reviewed source files; never use the binary bundled with Studio.
+FROM rust:1-slim-bookworm@sha256:ed2c95ca377d6571b124b05e75e01207973ded639dce7d5542eb7bcd797e32aa AS builder
+
+RUN printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+      > /etc/apt/apt.conf.d/80-bounded \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       build-essential clang libclang-dev cmake pkg-config libssl-dev libpq-dev \
+       ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo/ .cargo/
+COPY src/ src/
+
+# Match the published engine's features. Add ,sql for PostgreSQL and DuckDB,
+# or pass an empty value for the core engine. Limit RAM use on Docker Desktop.
+ARG CARGO_FEATURES=embeddings,plugins
+ARG CARGO_BUILD_JOBS=2
+ENV CARGO_INCREMENTAL=0 CARGO_PROFILE_RELEASE_DEBUG=0
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --locked --bin open-ontologies \
+      --jobs "${CARGO_BUILD_JOBS}" --features "${CARGO_FEATURES}" \
+    && install -Dm755 target/release/open-ontologies /out/open-ontologies \
+    && strip /out/open-ontologies
+
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates libssl3 libpq5 libstdc++6 libgomp1 curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 ontology \
+    && useradd --uid 10001 --gid ontology --home-dir /data --no-create-home ontology \
+    && install -d -o ontology -g ontology /data
+
+COPY --from=builder /out/open-ontologies /usr/local/bin/open-ontologies
+# Fail the build if a required runtime library is missing.
+RUN ldd /usr/local/bin/open-ontologies > /tmp/linked-libraries \
+    && cat /tmp/linked-libraries \
+    && ! grep -q 'not found' /tmp/linked-libraries \
+    && rm /tmp/linked-libraries
+
+ENV HOME=/data OPEN_ONTOLOGIES_STORAGE_MODE=persistent
+USER 10001:10001
+WORKDIR /data
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl --fail --silent --show-error --max-time 4 http://127.0.0.1:8080/health || exit 1
+ENTRYPOINT ["/usr/local/bin/open-ontologies"]
+CMD ["--data-dir", "/data", "serve-http", "--config", "/data/config.toml", "--host", "0.0.0.0", "--port", "8080"]

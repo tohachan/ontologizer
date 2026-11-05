@@ -1,0 +1,5 @@
+# Explicit opt-in to host access, bound to loopback rather than all interfaces.
+services:
+  engine:
+    ports:
+      - "127.0.0.1:${OPEN_ONTOLOGIES_HOST_PORT:-8080}:8080"

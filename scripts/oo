@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Open Ontologies client helper. Works the same on the host and inside a VM or
+# container that forwards 127.0.0.1:8080 to the host's server.
+#
+#   scripts/oo token                 print OPEN_ONTOLOGIES_TOKEN
+#   scripts/oo env-file              print which .env the token comes from
+#   scripts/oo curl PATH [curl args] curl $OPEN_ONTOLOGIES_URL/PATH with auth
+#   eval "$(scripts/oo export)"      export OPEN_ONTOLOGIES_TOKEN and _URL
+#
+# Token lookup order:
+#   1. .env at the root of the current checkout (git toplevel)
+#   2. .env at the root of the main checkout, when running in a linked worktree
+#      (found via git common dir, so worktrees need no copy of .env)
+#   3. OPEN_ONTOLOGIES_TOKEN already in the environment
+set -euo pipefail
+
+: "${OPEN_ONTOLOGIES_URL:=http://127.0.0.1:8080}"
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+find_env_file() {
+  local dir top common main
+  dir=$(pwd)
+  git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || dir=$script_dir
+  if top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null); then
+    [ -f "$top/.env" ] && { echo "$top/.env"; return 0; }
+    common=$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || common=
+    if [ -n "$common" ]; then
+      main=$(dirname "$common")
+      [ -f "$main/.env" ] && { echo "$main/.env"; return 0; }
+    fi
+  fi
+  return 1
+}
+
+read_token() {
+  local file val
+  if file=$(find_env_file); then
+    val=$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}OPEN_ONTOLOGIES_TOKEN=//p' "$file" | tail -n1)
+    val=${val%$'\r'}; val=${val#\"}; val=${val%\"}; val=${val#\'}; val=${val%\'}
+    [ -n "$val" ] && { printf '%s' "$val"; return 0; }
+  fi
+  [ -n "${OPEN_ONTOLOGIES_TOKEN:-}" ] && { printf '%s' "$OPEN_ONTOLOGIES_TOKEN"; return 0; }
+  echo "oo: OPEN_ONTOLOGIES_TOKEN not found (no .env in repo root / main worktree, env var unset)" >&2
+  return 1
+}
+
+cmd=${1:-}; [ $# -gt 0 ] && shift
+case "$cmd" in
+  token)    read_token; echo ;;
+  env-file) find_env_file || { echo "oo: no .env found" >&2; exit 1; } ;;
+  export)   t=$(read_token); printf 'export OPEN_ONTOLOGIES_TOKEN=%q\nexport OPEN_ONTOLOGIES_URL=%q\n' "$t" "$OPEN_ONTOLOGIES_URL" ;;
+  curl)
+    [ $# -ge 1 ] || { echo "usage: oo curl PATH [curl args...]" >&2; exit 2; }
+    path=${1#/}; shift
+    t=$(read_token)
+    exec curl -sS -H "Authorization: Bearer $t" "$@" "$OPEN_ONTOLOGIES_URL/$path" ;;
+  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; [ -z "$cmd" ] || exit 2 ;;
+esac

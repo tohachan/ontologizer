@@ -1,0 +1,24 @@
+# Hub config of the ontologizer kit. Holds only what is the kit's own:
+# the store, the IRI namespace, the levels preset and the kit's graphs.
+# Owners of the other graphs declare them in their own ontologizer.yaml with
+# `hub:` pointing here, and are registered per machine in ontologizer.local.yaml
+# (gitignored; see ontologizer.local.yaml.example and src/ontologizer/core/config.py).
+kit: ontologizer@0.1
+mode: on                      # off → the kit does not participate
+namespace: "urn:ontologizer:"
+levels: { preset: guarino-4 }
+store:
+  engine: open-ontologies
+  url: http://127.0.0.1:8080
+
+# Write policy of the kit's own graphs. Literal patterns win over globs.
+graphs:
+  - pattern: upper/gufo
+    mode: import-only
+    source: vendor/gufo-1.0.0.ttl
+    sha256: b234c7a22d738b66dc8fcf735146fdbe828122e2a04bec43c8c9b08f34fd9027
+  - pattern: kit/core
+    mode: import-only
+    source: kit/vocab.ttl
+  - pattern: inferred/*
+    mode: engine-only

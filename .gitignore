@@ -1,0 +1,20 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+*.egg-info/
+dist/
+build/
+.ruff_cache/
+.mypy_cache/
+# kit runtime and generated reference copies
+var/
+shapes/
+ontologizer.local.yaml
+# local Open Ontologies server: default engine clone, per-machine settings
+/oo/
+deps/open-ontologies/local.conf

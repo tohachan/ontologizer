@@ -1,0 +1,26 @@
+# Tracker profile for agent process skills working in this repository.
+#
+# The tracker is the local Itsaplan instance, project dev.ONTO. Without the
+# MCP server `plan-local` in a session, the same operations go through its
+# REST API (base URL and key from the
+# tracker's own setup; header x-api-key, never printed). ONTO has two `started` columns (In Progress,
+# In Review), so the phases that resolve to `started` are pinned by name.
+version: 1
+
+tracker:
+  kind: itsaplan
+  tool_prefix: "mcp__plan-local__"
+  project: "dev.ONTO"
+  project_id: "2"
+  id_pattern: "ONTO-\\d+"
+  task_url: "http://localhost:3001/dev/issue/{identifier}"
+  states:
+    accepted: unstarted
+    designing: "In Progress"
+    implementing: "In Progress"
+    reviewing: "In Review"
+    awaiting_verification: "In Review"
+    done: completed
+    canceled: canceled
+
+# integration: not declared — the repository has no remote.

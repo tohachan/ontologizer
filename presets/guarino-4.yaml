@@ -1,0 +1,58 @@
+# Guarino (FOIS 1998) four-level preset. Data, not code: a project may declare
+# another preset. SHACL shapes are generated from this file
+# (ontologizer.core.levels.generate_shapes).
+name: guarino-4
+upper: gufo                       # upper categories come from gUFO 1.0.0
+levels:
+  - id: top
+    rank: 0
+    label: Top-level
+    owned_by: upper               # only imported, never authored here
+  - id: domain
+    rank: 1
+    label: Domain
+  - id: task
+    rank: 1
+    label: Task
+  - id: application
+    rank: 2
+    label: Application
+
+# Which mapping kinds may go from a concept at level X to a concept at level Y.
+mappings:
+  application:
+    domain: [equivalence, specialization, roleOf, realization, partial]
+    task:   [equivalence, specialization, realization, partial]
+  domain:
+    domain: [specialization, roleOf, partial]
+  task:
+    task:   [specialization, partial]
+    domain: [realization]         # an activity realizes/acts on a domain concept
+
+# Graph-role → allowed concept levels.
+graph_levels:
+  domain: [domain]
+  task: [task]
+  project: [application]
+
+# Upper categories accepted in extractions → (gUFO meta-type, gUFO base class).
+upper_categories:
+  Kind:        {meta: Kind,         base: FunctionalComplex}
+  CollectionKind: {meta: Kind,      base: Collection}
+  SubKind:     {meta: SubKind}
+  Role:        {meta: Role}
+  Phase:       {meta: Phase}
+  Category:    {meta: Category}
+  Mixin:       {meta: Mixin}
+  RoleMixin:   {meta: RoleMixin}
+  PhaseMixin:  {meta: PhaseMixin}
+  Relator:     {meta: Kind,         base: Relator}
+  Event:       {meta: EventType,    base: Event}
+  Situation:   {meta: SituationType, base: Situation}
+  Quality:     {meta: Kind,         base: Quality}
+  Mode:        {meta: Kind,         base: IntrinsicMode}
+  Abstract:    {meta: AbstractIndividualType, base: AbstractIndividual}
+
+# Rule 11.3: a domain concept stays a hypothesis until confirmed by at least
+# this many architecturally different projects.
+domain_confirmation_min_projects: 2

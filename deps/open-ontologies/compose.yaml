@@ -1,0 +1,36 @@
+# Open Ontologies HTTP/MCP service, built from a local clone of the engine.
+# Run it through `make oo-server` (deps/open-ontologies/server.sh), which sets
+# OO_SRC, OO_DOCKERFILE and the token; see deps/open-ontologies/README.md.
+#
+# The project name is fixed so that the container and the data volume
+# (open-ontologies_ontology-data) stay the same whichever directory starts them.
+name: open-ontologies
+
+services:
+  engine:
+    image: open-ontologies-service:local
+    build:
+      # The clone of the engine; only the files allowed by
+      # Dockerfile.service.dockerignore (next to the Dockerfile) are sent.
+      context: ${OO_SRC:?Set OO_SRC to the engine clone; use make oo-server}
+      dockerfile: ${OO_DOCKERFILE:?Set OO_DOCKERFILE; use make oo-server}
+      args:
+        CARGO_FEATURES: ${CARGO_FEATURES-embeddings,plugins}
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-2}
+    environment:
+      OPEN_ONTOLOGIES_TOKEN: ${OPEN_ONTOLOGIES_TOKEN:?Set a nonempty OPEN_ONTOLOGIES_TOKEN before starting the service}
+      OPEN_ONTOLOGIES_STORAGE_MODE: persistent
+    volumes:
+      - ontology-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    # No host ports until explicitly enabled; see compose.localhost.yaml.
+
+volumes:
+  ontology-data:

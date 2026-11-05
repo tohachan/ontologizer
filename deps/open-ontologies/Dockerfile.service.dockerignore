@@ -1,0 +1,8 @@
+# Keep datasets, existing binaries, Git history and local secrets out of builds.
+**
+!Cargo.toml
+!Cargo.lock
+!.cargo/
+!.cargo/config.toml
+!src/
+!src/**/*.rs

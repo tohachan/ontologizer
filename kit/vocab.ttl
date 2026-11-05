@@ -1,0 +1,111 @@
+@prefix ok:   <urn:ontologizer:kit:> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+
+# Kit vocabulary: levels, provenance, mappings, relations, variation, views.
+# Knows nothing about any concrete project or domain.
+
+<urn:ontologizer:kit> a owl:Ontology ;
+    rdfs:label "ontologizer kit vocabulary"@en ;
+    owl:versionInfo "0.1.0" .
+
+## Levels ------------------------------------------------------------------
+ok:Level a owl:Class ; rdfs:label "Level"@en ;
+    rdfs:comment "A level of generality declared by a levels preset (data, not code)."@en .
+ok:level a owl:ObjectProperty ; rdfs:label "level"@en ; rdfs:range ok:Level .
+ok:levelRank a owl:DatatypeProperty ; rdfs:domain ok:Level ; rdfs:range xsd:integer .
+ok:preset a owl:DatatypeProperty ; rdfs:domain ok:Level .
+
+## Concepts ----------------------------------------------------------------
+ok:Concept a owl:Class ; rdfs:label "Modeled concept"@en ;
+    rdfs:comment "A type modeled at some level. Also an owl:Class typed with its gUFO meta-type."@en .
+ok:upperCategory a owl:ObjectProperty ; rdfs:domain ok:Concept ;
+    rdfs:comment "gUFO meta-type the concept instantiates (gufo:Kind, gufo:Role, gufo:EventType, …)."@en .
+ok:inProject a owl:ObjectProperty ; rdfs:range ok:Project .
+ok:Project a owl:Class ; rdfs:label "Analysed project"@en .
+ok:repository a owl:DatatypeProperty ; rdfs:domain ok:Project .
+ok:analysedCommit a owl:DatatypeProperty ; rdfs:domain ok:Project .
+
+## Provenance ----------------------------------------------------------------
+ok:StatusScheme a skos:ConceptScheme ; skos:prefLabel "Statement status"@en .
+ok:asserted   a skos:Concept ; skos:inScheme ok:StatusScheme ; skos:prefLabel "asserted"@en , "утверждено"@ru .
+ok:inferred   a skos:Concept ; skos:inScheme ok:StatusScheme ; skos:prefLabel "inferred"@en , "выведено"@ru .
+ok:hypothesis a skos:Concept ; skos:inScheme ok:StatusScheme ; skos:prefLabel "hypothesis"@en , "гипотеза"@ru .
+ok:disputed   a skos:Concept ; skos:inScheme ok:StatusScheme ; skos:prefLabel "disputed"@en , "спорно"@ru .
+ok:status a owl:ObjectProperty ; rdfs:range skos:Concept .
+
+ok:Evidence a owl:Class ; rdfs:subClassOf prov:Entity ; rdfs:label "Evidence"@en .
+ok:evidence a owl:ObjectProperty ; rdfs:range ok:Evidence ; rdfs:subPropertyOf prov:wasDerivedFrom .
+ok:sourceRepo a owl:DatatypeProperty ; rdfs:domain ok:Evidence .
+ok:sourcePath a owl:DatatypeProperty ; rdfs:domain ok:Evidence .
+ok:sourceLines a owl:DatatypeProperty ; rdfs:domain ok:Evidence .
+ok:sourceCommit a owl:DatatypeProperty ; rdfs:domain ok:Evidence .
+ok:sourceKind a owl:DatatypeProperty ; rdfs:domain ok:Evidence ;
+    rdfs:comment "code | doc | test | config | graph | plan"@en .
+ok:note a owl:DatatypeProperty .
+ok:confidence a owl:DatatypeProperty ; rdfs:comment "high | medium | low"@en .
+
+## Mappings between levels -------------------------------------------------
+ok:Mapping a owl:Class ; rdfs:label "Mapping"@en ;
+    rdfs:comment "Reified link from a concept to a concept at another level, with its own status and evidence."@en .
+ok:mappingSource a owl:ObjectProperty ; rdfs:domain ok:Mapping .
+ok:mappingTarget a owl:ObjectProperty ; rdfs:domain ok:Mapping .
+ok:mappingKind a owl:ObjectProperty ; rdfs:domain ok:Mapping .
+ok:candidateLabel a owl:DatatypeProperty ; rdfs:domain ok:Mapping ;
+    rdfs:comment "Proposed target not yet in a shared graph (resolved during consolidation)."@en .
+ok:candidateLevel a owl:ObjectProperty ; rdfs:domain ok:Mapping ; rdfs:range ok:Level .
+ok:MappingKindScheme a skos:ConceptScheme .
+ok:equivalence    a skos:Concept ; skos:inScheme ok:MappingKindScheme ; skos:prefLabel "equivalence"@en ;
+    skos:definition "Same concept under a project-specific name."@en .
+ok:specialization a skos:Concept ; skos:inScheme ok:MappingKindScheme ; skos:prefLabel "specialization"@en ;
+    skos:definition "Every instance of the source is an instance of the target."@en .
+ok:roleOf         a skos:Concept ; skos:inScheme ok:MappingKindScheme ; skos:prefLabel "role"@en ;
+    skos:definition "The source is a role played by instances of the target in some relationship."@en .
+ok:realization    a skos:Concept ; skos:inScheme ok:MappingKindScheme ; skos:prefLabel "realization"@en ;
+    skos:definition "The source (component, mechanism, process) implements the target activity or concept."@en .
+ok:partial        a skos:Concept ; skos:inScheme ok:MappingKindScheme ; skos:prefLabel "partial overlap"@en ;
+    skos:definition "Source and target overlap without either including the other."@en .
+
+## Relations between concepts of one level ---------------------------------
+ok:Relation a owl:Class ; rdfs:label "Relation"@en .
+ok:relFrom a owl:ObjectProperty ; rdfs:domain ok:Relation .
+ok:relTo a owl:ObjectProperty ; rdfs:domain ok:Relation .
+ok:relType a owl:ObjectProperty ; rdfs:domain ok:Relation .
+ok:RelationTypeScheme a skos:ConceptScheme .
+ok:partOf       a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "part of"@en .
+ok:dependsOn    a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "depends on"@en .
+ok:uses         a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "uses"@en .
+ok:produces     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "produces"@en .
+ok:participatesIn a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "participates in"@en .
+ok:mediates     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "mediates"@en .
+ok:owns         a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "owns / manages lifecycle of"@en .
+ok:triggers     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "triggers"@en .
+ok:hasPhase     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "has phase"@en .
+ok:associatedWith a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "associated with"@en .
+
+## Variation points --------------------------------------------------------
+ok:VariationDimension a owl:Class ; rdfs:subClassOf skos:ConceptScheme ; rdfs:label "Variation dimension"@en .
+ok:VariationValue a owl:Class ; rdfs:subClassOf skos:Concept ; rdfs:label "Variation value"@en .
+ok:VariationChoice a owl:Class ; rdfs:label "Variation choice"@en ;
+    rdfs:comment "A project's chosen value on a dimension, with evidence."@en .
+ok:choiceProject a owl:ObjectProperty ; rdfs:domain ok:VariationChoice .
+ok:choiceDimension a owl:ObjectProperty ; rdfs:domain ok:VariationChoice .
+ok:choiceValue a owl:ObjectProperty ; rdfs:domain ok:VariationChoice .
+
+## Views (named diagrams) --------------------------------------------------
+ok:View a owl:Class ; rdfs:label "Named view"@en .
+ok:viewConcept a owl:ObjectProperty ; rdfs:domain ok:View .
+ok:viewRelType a owl:ObjectProperty ; rdfs:domain ok:View .
+
+## Releases and source tracking --------------------------------------------
+ok:Release a owl:Class ; rdfs:label "Graph release"@en .
+ok:releaseOf a owl:DatatypeProperty ; rdfs:domain ok:Release .
+ok:releaseVersion a owl:DatatypeProperty ; rdfs:domain ok:Release .
+ok:releaseGraph a owl:DatatypeProperty ; rdfs:domain ok:Release .
+ok:contentHash a owl:DatatypeProperty .
+ok:sourceHash a owl:DatatypeProperty ;
+    rdfs:comment "Hash of the extraction input; re-ingesting an unchanged source is a no-op."@en .

@@ -1,0 +1,12 @@
+ontologizer
+Copyright 2026 tohachan
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository includes third-party material under its own licence:
+
+- vendor/gufo-1.0.0.ttl: "gUFO: A Lightweight Implementation of the Unified
+  Foundational Ontology (UFO)", version 1.0.0, by João Paulo A. Almeida,
+  Giancarlo Guizzardi, Tiago P. Sales and Ricardo A. Falbo. Licensed under Creative Commons Attribution 4.0 International
+  (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/legalcode.
+  Source: https://purl.org/nemo/gufo. Included unmodified.

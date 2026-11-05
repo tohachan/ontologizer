@@ -1,0 +1,13 @@
+# Per-machine overlay of the hub config. Copy to ontologizer.local.yaml (gitignored).
+#
+# projects: owners of graphs other than the kit's own — name → directory of
+# their ontologizer.yaml, relative to this file (in a git worktree, also tried
+# from the main checkout). Every config sees every owner, so writes, releases
+# and exports respect ownership from any side.
+projects:
+  my-study: ../my-study               # a study repository
+  my-project: ../my-project/onto      # a project describing itself
+
+# store: override the server for this machine.
+# store:
+#   url: http://127.0.0.1:8080

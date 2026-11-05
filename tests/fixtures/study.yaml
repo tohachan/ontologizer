@@ -1,0 +1,17 @@
+# A study config for tests: shared levels in shared/*, analysed projects in projects/*.
+project: study
+graphs:
+- {pattern: shared/domain, mode: research, role: domain}
+- {pattern: shared/task, mode: research, role: task}
+- {pattern: shared/variation, mode: research, role: variation}
+- {pattern: projects/*, mode: research, role: project}
+shared:
+  domain: shared/domain
+  task: shared/task
+  variation: shared/variation
+validation_context:
+  domain: [kit/core, upper/gufo, shared/task, shared/variation]
+  task: [kit/core, upper/gufo, shared/domain]
+  variation: [kit/core]
+  project: [kit/core, upper/gufo, shared/domain, shared/task, shared/variation]
+# paths: the defaults, ontology/<level>

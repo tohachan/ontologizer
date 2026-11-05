@@ -1,0 +1,8 @@
+# Per-machine overrides of defaults.conf. Copy to local.conf (gitignored).
+# Set only what differs on this machine.
+
+# An engine clone that already exists elsewhere:
+# OO_SRC=../open-ontologies
+
+# Another port (also change store.url in ontologizer.local.yaml):
+# OO_URL=http://127.0.0.1:8090
