@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import yaml
 
@@ -137,3 +139,37 @@ def test_gold_category_item_reads_the_concept_of_a_batched_state():
               "state": {"concept": {"label": "Appraisal"}}}
     assert review._item(batched)["context"]["concept"] == {"n": 1, "label": "Leave request"}
     assert review._item(single)["context"]["concept"] == {"label": "Appraisal"}
+
+
+def test_item_every_rechecker_authored_keeps_its_judgement(study, tmp_path):
+    """When the default rechecker and its fallback both made a judgement (all three extractors wrote the
+    concept), no model may recheck it: it is marked, kept as it is, and does not block the other rechecks."""
+    from test_process import _sources
+    _approve(study)
+    data = yaml.safe_load((study / "ontologizer.yaml").read_text())
+    data["process"]["recheck"] = {"harness": "codex", "model": "gpt-6-astra",
+                                  "fallback": {"harness": "claude", "model": "claude-sonnet-5-5"}}
+    (study / "ontologizer.yaml").write_text(yaml.safe_dump(data))
+    commits = _sources(tmp_path)
+    run = _run(study)
+    doc = _extraction("alpha", "opus", [{**_concept("lease", "Lease"), "status": "disputed", "note": "docs differ"}],
+                      commits["alpha"])
+    doc["concepts"][0]["evidence"].append({"path": "src/b.go", "lines": "1", "kind": "code"})
+    doc["extractors"] = [{"id": "opus", "model": "claude-opus-5-5"}, {"id": "sonnet", "model": "claude-sonnet-5-5"},
+                         {"id": "codex", "model": "gpt-6-astra"}]
+    save_json(application_file(run.cfg, "alpha"), doc)
+    verify.analyse(run, "alpha")
+    rc = yaml.safe_load(run.path("verify", "alpha.recheck.json").read_text())
+    item = next(i for i in rc["items"] if i["id"] == "status:lease")
+    assert item["recheck_by"] == verify.NO_RECHECKER
+    others = {i["id"]: {"verdict": "confirm", "reason": "ok"} for i in rc["items"] if i["id"] != "status:lease"}
+    # an answer by an author for that item is ignored, not refused
+    save_json(run.path("verify", "alpha.recheck.answers.json"), {
+        "model": "gpt-6-astra", "harness": "codex", "run_id": "s1",
+        "verdicts": {**others, "status:lease": {"verdict": "change", "value": "hypothesis", "reason": "provisional"}}})
+    st = verify.apply(run, "alpha")
+    assert st["no_rechecker"] == ["status:lease"]
+    lease = next(c for c in json.loads(application_file(run.cfg, "alpha").read_text())["concepts"] if c["id"] == "lease")
+    # the author's answer was not applied; only stage 6's own evidence rule may still undispute it
+    assert "provisional" not in lease.get("note", "")
+    assert lease["status"] == ("hypothesis" if "concept:lease" in st["undisputed"] else "disputed")

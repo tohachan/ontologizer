@@ -183,11 +183,15 @@ def analyse(run: Run, project: str) -> dict:
     dec.done()
     rechecks = low + _judgement_rechecks(run, project, doc)
     conf = rechecker(run) or {}
+    def authored(model, au) -> bool:
+        return bool(model) and (au == model or (isinstance(au, list) and model in au))
+
     for it in rechecks:   # the default rechecker also authored this item (e.g. it is an extractor): the fallback answers
         au = it.get("author")
-        if conf.get("model") and (au == conf["model"] or (isinstance(au, list) and conf["model"] in au)):
+        if authored(conf.get("model"), au):
             fb = conf.get("fallback") or {}
-            it["recheck_by"] = fb.get("model") or "another model"
+            # the fallback made it too (every extractor wrote the concept): no model may recheck it
+            it["recheck_by"] = NO_RECHECKER if authored(fb.get("model"), au) else (fb.get("model") or "another model")
     checked = [i for i in items if i["verdict"] in ("supported", "unsupported", "missing")]
     supported = sum(1 for i in checked if i["verdict"] == "supported")
     out = {"project": project, "run": run.id, "at": now(), "mode": dec.mode, "threshold": thr,
@@ -229,9 +233,12 @@ def _judgement_rechecks(run: Run, project: str, doc: dict) -> list[dict]:
     return out
 
 
+NO_RECHECKER = "none-available"   # recheck_by of an item every rechecker authored: kept as judged, counted apart
+
 RECHECK_HELP = (
     "You are a different model from the one that made each judgement (see `author`). An item with `recheck_by` "
-    "is answered by that model instead: put its verdict with `\"model\": \"<that model>\"` inside the verdict. "
+    "is answered by that model instead: put its verdict with `\"model\": \"<that model>\"` inside the verdict "
+    f"(`recheck_by: {NO_RECHECKER}` needs no answer: every rechecker made that judgement, so it is kept as it is). "
     "For every item, read the "
     "evidence (and the source when needed) and write verify/<project>.recheck.answers.json as {\"model\": \"<id>\", "
     "\"harness\": \"claude|codex\", \"run_id\": \"<session or stream id>\", \"verdicts\": {\"<item id>\": "
@@ -281,6 +288,10 @@ def apply(run: Run, project: str, keep_failed: bool = False) -> dict:
     if unknown:
         raise VerifyError(f"{project}: recheck items without a known author {unknown[:5]}; the judgement's model "
                           f"must be recorded (e.g. `model` in map/<p>.answers.json) so another model rechecks it")
+    blind = [i["id"] for i in rc["items"] if i.get("recheck_by") == NO_RECHECKER]
+    for k in blind:      # no independent model exists for it: the current judgement stands, whatever was answered
+        verdicts[k] = {"verdict": "confirm", "reason": "no rechecker available: every rechecker authored it",
+                       "model": NO_RECHECKER}
     missing = [i["id"] for i in rc["items"] if not (verdicts.get(i["id"]) or {}).get("reason")]
     if missing:
         raise VerifyError(f"{project}: {len(missing)} recheck item(s) without a verdict and reason in "
@@ -288,8 +299,8 @@ def apply(run: Run, project: str, keep_failed: bool = False) -> dict:
     def judge_of(item_id: str) -> str | None:   # a verdict may name its own model (an item every main model authored)
         return (verdicts.get(item_id) or {}).get("model") or ra.get("model")
 
-    same = [i["id"] for i in rc["items"]
-            if judge_of(i["id"]) == i["author"] or (isinstance(i["author"], list) and judge_of(i["id"]) in i["author"])]
+    same = [i["id"] for i in rc["items"] if i["id"] not in blind and (
+            judge_of(i["id"]) == i["author"] or (isinstance(i["author"], list) and judge_of(i["id"]) in i["author"]))]
     if same:
         raise VerifyError(f"{project}: rechecked by {ra.get('model')}, the model that made {same[:5]}")
     policy = recheck_policy(run, ra) if rc["items"] else None
@@ -408,6 +419,7 @@ def apply(run: Run, project: str, keep_failed: bool = False) -> dict:
     for t in by_type.values():
         t["change_rate"] = round(t["changed"] / t["rechecked"], 3) if t["rechecked"] else None
     stats = {"removed_claims": removed, "dropped_evidence": dropped_ev, "rechecks_changed": changed,
+             "no_rechecker": blind,
              "recheck_by_type": by_type,
              "undisputed": undisputed,
              "recheck": {"model": ra.get("model"), "harness": ra.get("harness"), "run_id": ra.get("run_id"),
