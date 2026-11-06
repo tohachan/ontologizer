@@ -115,3 +115,74 @@ def test_jev_without_key_fails_without_leaking(tmp_path, monkeypatch):
     d._key = None
     with pytest.raises(RuntimeError, match="no API key"):
         d.decide({}, [Question("a", "noul", instructions="?")])
+
+
+# ---- Open Ontologies: graph writes larger than one request ------------------------
+class _RecordingStore:
+    """An OpenOntologies whose transport records the SPARQL updates instead of sending them."""
+
+    def __new__(cls, limit):
+        from ontologizer.adapters.engine.open_ontologies import OpenOntologies
+
+        class Rec(OpenOntologies):
+            def __init__(self):
+                super().__init__(url="http://test", token="t", max_update_bytes=limit)
+                self.sent: list[str] = []
+
+            def update(self, sparql):
+                self.sent.append(sparql)
+                return 0
+
+            def graph_size(self, graph_iri):
+                return 0
+
+        return Rec()
+
+
+def _nt(n):
+    return "".join(f"<urn:s:{i}> <urn:p> \"value {i} {'x' * 40}\" .\n" for i in range(n))
+
+
+def test_small_graph_is_replaced_in_one_request():
+    st = _RecordingStore(limit=100_000)
+    st.replace_graph("urn:ontologizer:graph:a", _nt(10))
+    assert len(st.sent) == 1
+    assert st.sent[0].startswith("DROP SILENT GRAPH <urn:ontologizer:graph:a>") and "INSERT DATA" in st.sent[0]
+
+
+def test_large_graph_is_staged_in_chunks_and_moved_in_one_step():
+    nt = _nt(400)
+    st = _RecordingStore(limit=4_000)
+    st.replace_graph("urn:ontologizer:graph:a", nt)
+    assert all(len(s.encode()) <= 4_000 for s in st.sent)       # every request fits the server's limit
+    staging = st.sent[0].split("<")[1].split(">")[0]
+    assert staging.startswith("urn:ontologizer-staging:")          # outside the kit's graph prefix
+    inserts = [s for s in st.sent if s.startswith("INSERT DATA")]
+    assert len(inserts) > 1 and all(f"GRAPH <{staging}>" in s for s in inserts)
+    assert st.sent[-1] == f"MOVE SILENT GRAPH <{staging}> TO <urn:ontologizer:graph:a>"   # atomic swap
+    written = [ln for s in inserts for ln in s.splitlines() if ln.startswith("<urn:s:")]
+    assert sorted(written) == sorted(nt.splitlines())              # nothing lost or split mid-triple
+
+
+def test_failed_staged_write_drops_the_staging_graph():
+    st = _RecordingStore(limit=4_000)
+    calls = {"n": 0}
+    orig = st.update
+
+    def flaky(sparql):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("store down")
+        return orig(sparql)
+
+    st.update = flaky
+    with pytest.raises(RuntimeError):
+        st.replace_graph("urn:ontologizer:graph:a", _nt(400))
+    assert st.sent[-1].startswith("DROP SILENT GRAPH <urn:ontologizer-staging:")
+
+
+def test_large_add_and_remove_are_chunked():
+    st = _RecordingStore(limit=4_000)
+    st.add_to_graph("urn:ontologizer:graph:a", _nt(400))
+    st.remove_from_graph("urn:ontologizer:graph:a", _nt(400))
+    assert len(st.sent) > 2 and all(len(s.encode()) <= 4_000 for s in st.sent)

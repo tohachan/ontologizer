@@ -13,11 +13,16 @@ import os
 import re
 import subprocess
 import urllib.request
+import uuid
 from pathlib import Path
 
 from ontologizer.ports.engine import Capabilities
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+# The server refuses request bodies above about 2 MiB (HTTP 413); a graph write larger than this many
+# bytes of SPARQL is split. `OPEN_ONTOLOGIES_MAX_UPDATE_BYTES` overrides it.
+MAX_UPDATE_BYTES = 1_500_000
+STAGING_PREFIX = "urn:ontologizer-staging:"   # outside the kit's graph prefix, so snapshots never see it
 
 
 class EngineError(RuntimeError):
@@ -42,8 +47,11 @@ def _iri(graph_iri: str) -> str:
 
 
 class OpenOntologies:
-    def __init__(self, url: str | None = None, token: str | None = None, timeout: float = 120):
+    def __init__(self, url: str | None = None, token: str | None = None, timeout: float = 120,
+                 max_update_bytes: int | None = None):
         self.url = (url or os.environ.get("OPEN_ONTOLOGIES_URL") or "http://127.0.0.1:8080").rstrip("/")
+        self.max_update_bytes = int(max_update_bytes or os.environ.get("OPEN_ONTOLOGIES_MAX_UPDATE_BYTES")
+                                    or MAX_UPDATE_BYTES)
         self._token = token
         self.timeout = timeout
         self._mcp_session: str | None = None
@@ -181,21 +189,55 @@ class OpenOntologies:
             out.setdefault(r["g"].strip("<>"), []).append(f"{r['s']} {r['p']} {r['o']} .")
         return {g: "\n".join(sorted(set(v))) + "\n" for g, v in out.items()}
 
+    def _chunks(self, ntriples: str, overhead: int) -> list[str]:
+        """N-Triples split at line ends so that each chunk plus `overhead` bytes of SPARQL fits one request."""
+        room = max(self.max_update_bytes - overhead, 1)
+        out, cur, size = [], [], 0
+        for line in ntriples.splitlines(keepends=True):
+            n = len(line.encode())
+            if cur and size + n > room:
+                out.append("".join(cur))
+                cur, size = [], 0
+            cur.append(line)
+            size += n
+        if cur:
+            out.append("".join(cur))
+        return out
+
     def replace_graph(self, graph_iri: str, ntriples: str) -> int:
         g = _iri(graph_iri)
-        # One update request = one transaction in Oxigraph: readers never see the empty graph.
-        self.update(f"DROP SILENT GRAPH {g} ;\nINSERT DATA {{ GRAPH {g} {{\n{ntriples}\n}} }}")
+        one = f"DROP SILENT GRAPH {g} ;\nINSERT DATA {{ GRAPH {g} {{\n{ntriples}\n}} }}"
+        if len(one.encode()) <= self.max_update_bytes:
+            # One update request = one transaction in Oxigraph: readers never see the empty graph.
+            self.update(one)
+            return self.graph_size(graph_iri)
+        # Too large for one request: write a staging graph in chunks, then swap it in with one MOVE,
+        # which is again a single transaction, so readers see the old graph or the new one, never a part.
+        st = _iri(STAGING_PREFIX + uuid.uuid4().hex)
+        head = f"INSERT DATA {{ GRAPH {st} {{\n"
+        try:
+            self.update(f"DROP SILENT GRAPH {st}")
+            for chunk in self._chunks(ntriples, len(head.encode()) + 8):
+                self.update(f"{head}{chunk}\n}} }}")
+            self.update(f"MOVE SILENT GRAPH {st} TO {g}")
+        except Exception:
+            try:
+                self.update(f"DROP SILENT GRAPH {st}")
+            finally:
+                raise
         return self.graph_size(graph_iri)
 
-    def add_to_graph(self, graph_iri: str, ntriples: str) -> int:
+    def _data_update(self, verb: str, graph_iri: str, ntriples: str) -> int:
         if not ntriples.strip():
             return 0
-        return self.update(f"INSERT DATA {{ GRAPH {_iri(graph_iri)} {{\n{ntriples}\n}} }}")
+        head = f"{verb} DATA {{ GRAPH {_iri(graph_iri)} {{\n"
+        return sum(self.update(f"{head}{chunk}\n}} }}") for chunk in self._chunks(ntriples, len(head.encode()) + 8))
+
+    def add_to_graph(self, graph_iri: str, ntriples: str) -> int:
+        return self._data_update("INSERT", graph_iri, ntriples)
 
     def remove_from_graph(self, graph_iri: str, ntriples: str) -> int:
-        if not ntriples.strip():
-            return 0
-        return self.update(f"DELETE DATA {{ GRAPH {_iri(graph_iri)} {{\n{ntriples}\n}} }}")
+        return self._data_update("DELETE", graph_iri, ntriples)
 
     def drop_graph(self, graph_iri: str) -> None:
         self.update(f"DROP SILENT GRAPH {_iri(graph_iri)}")
