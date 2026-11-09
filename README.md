@@ -191,7 +191,7 @@ uv run --project ../ontologizer ontologizer export-md                    # → e
 | --- | --- |
 | `status` | Shows the loaded config and every graph's mode, owner and size |
 | `bootstrap` | Imports the pinned `upper/gufo` and `kit/core` |
-| `validate FILE.json` / `ingest FILE.json [--dry-run]` | Checks the extraction against the schema and SHACL. `ingest` then writes it to its graph |
+| `validate FILE.json…` / `ingest FILE.json… [--dry-run]` | Checks the extraction against the schema and SHACL. `ingest` then writes it to its graph. Files that refer to each other, such as two levels with relations across them, go in one call: each is validated against the others as they will be, and nothing is written unless all pass |
 | `export-graph PATH [--turtle]` / `import-graph PATH FILE.ttl` | Copies one graph out of the store / replaces one graph from a file. A file with none of the kit's vocabulary is refused in a graph with a role: the kit would see nothing in it |
 | `release PATH … VER` | Releases a set of research graphs as one immutable version `PATH@VER`. Release terms get their own IRIs (`…<path>@<ver>:<id>`, linked to the working term by `dcterms:isVersionOf`), and references inside the set follow them, so versions never mix in queries or reasoning; a reference to a working graph with no release at that version is refused. `release --migrate-iris VER` rewrites releases made before this rule |
 | `export-md` | Writes markdown for the owned graphs plus comparison views; the output is deterministic |

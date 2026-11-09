@@ -72,7 +72,9 @@ class WriteRoute:
         return canonical_hash(self.read_graph(path))
 
     # ---- validation -------------------------------------------------------------
-    def validate(self, path: str, candidate: Graph) -> tuple[bool, str]:
+    def validate(self, path: str, candidate: Graph, together: dict[str, Graph] | None = None) -> tuple[bool, str]:
+        """`together`: graphs being written with this one, which stand in for their state in the store."""
+        together = together or {}
         pol = self.cfg.policy(path)
         role = pol.role
         if role is None:
@@ -83,7 +85,7 @@ class WriteRoute:
         for ctx in self.cfg.validation_context(role):
             if ctx == path:
                 continue
-            data += self.read_graph(ctx)
+            data += together[ctx] if ctx in together else self.read_graph(ctx)
         conforms, results, _ = shacl_validate(data, shacl_graph=shapes, advanced=True,
                                               inference="none", allow_warnings=True)
         if conforms:
@@ -110,7 +112,8 @@ class WriteRoute:
 
     # ---- writing ------------------------------------------------------------------
     def write(self, path: str, candidate: Graph, *, op: str = "replace", reason: str = "",
-              base_hash: str | None = None, dry_run: bool = False) -> WriteResult:
+              base_hash: str | None = None, dry_run: bool = False,
+              together: dict[str, Graph] | None = None) -> WriteResult:
         pol = self.cfg.policy(path)
         if not self.cfg.enabled:
             raise WriteRejected("mode: off — the kit does not participate")
@@ -141,7 +144,7 @@ class WriteRoute:
         else:
             raise ValueError(op)
 
-        ok, report = self.validate(path, new)
+        ok, report = self.validate(path, new, together)
         if not ok:
             raise WriteRejected(f"SHACL rejected the write to {path}:\n{report}")
         new_hash = canonical_hash(new)
@@ -159,6 +162,15 @@ class WriteRoute:
         self._log({"op": op, "graph": path, "reason": reason, "from": current_hash,
                    "to": new_hash, "added": result.added, "removed": result.removed})
         return result
+
+    def write_together(self, graphs: dict[str, Graph], *, reason: str = "", dry_run: bool = False) -> list[WriteResult]:
+        """Replace several graphs that refer to each other, such as two levels with relations across
+        them, where none could be written first. Each is validated against the others as they will
+        be, not as the store holds them, and nothing is written unless all of them pass."""
+        checks = [self.write(p, g, reason=reason, dry_run=True, together=graphs) for p, g in graphs.items()]
+        if dry_run:
+            return checks
+        return [self.write(p, g, reason=reason, together=graphs) for p, g in graphs.items()]
 
     def submit_update(self, path: str, sparql_update: str, reason: str = "") -> WriteResult:
         """Apply a raw SPARQL Update to ONE graph. Evaluated locally first: any effect
