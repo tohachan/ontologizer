@@ -38,11 +38,11 @@ import json
 import sys
 from pathlib import Path
 
-from rdflib import Graph
+from rdflib import RDF, Graph
 
 from ontologizer.adapters.engine.open_ontologies import OpenOntologies
 from ontologizer.adapters.exporter.markdown import MarkdownExporter
-from ontologizer.core.config import Config
+from ontologizer.core.config import KIT, Config
 from ontologizer.core.extraction import ExtractionError, to_graph
 from ontologizer.core.levels import Preset
 from ontologizer.core.route import WriteRejected, WriteRoute
@@ -130,6 +130,12 @@ def cmd_export_graph(args) -> int:
 def cmd_import_graph(args) -> int:
     r = _route(args)
     g = Graph().parse(args.file)
+    if r.cfg.policy(args.path).role and len(g) and not any(str(o).startswith(KIT) for o in g.objects(None, RDF.type)):
+        print(f"refused: {args.file} uses none of the kit's vocabulary, so in a `{r.cfg.policy(args.path).role}` graph "
+              f"the kit would see nothing in it, and the write would replace all of {args.path}. To analyse it, make it "
+              f"a source of the staged process (docs/process.md §10). To keep it as it is, import it into a graph with "
+              f"no role.", file=sys.stderr)
+        return 3
     try:
         res = r.write(args.path, g, op="replace", reason=f"import {args.file}")
     except WriteRejected as e:
@@ -149,6 +155,11 @@ def cmd_release(args) -> int:
             any(r.cfg.policy(p).role in ("domain", "task") for p in args.paths):
         from ontologizer.core.review import require_review
         ok, why = require_review(r.cfg)
+        if not ok:
+            print(f"release refused: {why}; pass --unreviewed to release anyway (recorded as such)", file=sys.stderr)
+            return 3
+        from ontologizer.core.update_check import require_update_check
+        ok, why = require_update_check(r.cfg, r.engine)
         if not ok:
             print(f"release refused: {why}; pass --unreviewed to release anyway (recorded as such)", file=sys.stderr)
             return 3

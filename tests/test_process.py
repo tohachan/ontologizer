@@ -8,17 +8,19 @@ from pathlib import Path
 
 import pytest
 import yaml
+from rdflib import Graph
 
 from ontologizer.core import plugins
 from ontologizer.core.config import Config
 from ontologizer.core.extraction import to_graph, validate
 from ontologizer.core.frame import Frame, FrameError, approve, check, gate_status, require_frame
 from ontologizer.core.levels import Preset
+from ontologizer.core.route import WriteRoute
 from ontologizer.core.run import PendingDecisions, Run, save_json
 from ontologizer.ports.decisions import Answer, Question, Receipt
 from ontologizer.ports.inventory import Candidate
 
-from conftest import ROOT, make_hub, make_study
+from conftest import ROOT, MemoryEngine, make_hub, make_study
 
 FRAME = """---
 study: study
@@ -795,3 +797,375 @@ def test_recheck_verdicts_reach_the_final_items(study):
     assert [i["final"] for i in final_items(run, "alpha", v)] == ["unsupported", "supported", "no-evidence"]   # not applied
     v["applied"] = {"at": "t"}
     assert [i["final"] for i in final_items(run, "alpha", v)] == ["supported", "supported", "no-evidence"]
+
+
+# ---- growing the shared levels: decisions on top of earlier decisions ---------------------
+def _grow(study, tmp_path):
+    from ontologizer.core.shared import shared_file
+    (study / "frame.md").write_text(ONE_SOURCE)
+    _approve(study)
+    cfg, fr = _cfg(study), Frame.load(_cfg(study))
+    commit = _git_repo(tmp_path / "sources" / "alpha", {"doc.md": "session is here\nstep runs here\nplan goes first\ngate holds\n"})
+    app = _extraction("alpha", "opus", [_concept("session", "Session", path="doc.md", lines="1"),
+                                        _concept("step", "Step", path="doc.md", lines="2"),
+                                        _concept("plan", "Plan", cat="Event", path="doc.md", lines="3"),
+                                        _concept("gate", "Gate", path="doc.md", lines="4")], commit=commit)
+    save_json(cfg.path("application") / "alpha.json", app)
+    seeds = {lv: shared_file(cfg, lv) for lv in ("domain", "task")}
+    (study / "consolidation").mkdir()
+
+    def decide(name, dec):
+        (study / "consolidation" / f"{name}.yaml").write_text(yaml.safe_dump({"model": "m", **dec}))
+        return consolidate_(study / "consolidation" / f"{name}.yaml", seeds, cfg.path("application"), frame=fr, min_families=1)
+
+    def new(cid, label=None, support=None, **kw):
+        label = label or cid.title()
+        return {"id": cid, "label": label, "cat": "Kind", "def": f"{label} is here.", "reason": "r",
+                "support": support or [f"alpha:{cid}"], **kw}
+    return cfg, fr, seeds, decide, new
+
+
+from ontologizer.core.consolidation import apply as consolidate_  # noqa: E402
+
+
+def _level(seeds, lv):
+    return json.loads(seeds[lv].read_text())
+
+
+def _maps(cfg, cid):
+    d = json.loads((cfg.path("application") / "alpha.json").read_text())
+    return next(c for c in d["concepts"] if c["id"] == cid).get("maps_to", [])
+
+
+def test_decisions_add_to_earlier_ones_and_can_remove(study, tmp_path):
+    cfg, fr, seeds, decide, new = _grow(study, tmp_path)
+    assert decide("a", {"new_domain": [new("session"), new("step")],
+                        "relations": [["step", "uses", "session", "runs in", ["alpha"]]]}) == 0
+    # a later decision that says nothing about the relation keeps it
+    assert decide("b", {"new_domain": [new("gate")]}) == 0
+    d = _level(seeds, "domain")
+    assert {c["id"] for c in d["concepts"]} == {"session", "step", "gate"} and len(d["relations"]) == 1
+    # a removal needs a reason, and takes its relations and mappings along
+    assert decide("c", {"removed": [{"ref": "domain:session"}]}) == 1
+    assert decide("c", {"removed": [{"ref": "domain:session", "reason": "not a thing"}]}) == 0
+    d = _level(seeds, "domain")
+    assert {c["id"] for c in d["concepts"]} == {"step", "gate"} and d["relations"] == []
+    assert _maps(cfg, "session") == []
+    assert decide("c", {"removed": [{"ref": "domain:session", "reason": "not a thing"}]}) == 0   # idempotent
+    # a relation goes only when asked, with a reason
+    assert decide("d", {"relations": [["step", "dependsOn", "gate", "guarded by", ["alpha"]]]}) == 0
+    assert decide("e", {"remove_relations": [{"relation": ["step", "dependsOn", "gate"]}]}) == 1
+    assert decide("e", {"remove_relations": [{"relation": ["step", "dependsOn", "gate"], "reason": "no"}]}) == 0
+    assert _level(seeds, "domain")["relations"] == []
+
+
+def test_a_concept_moves_between_levels_and_mappings_follow(study, tmp_path):
+    cfg, fr, seeds, decide, new = _grow(study, tmp_path)
+    assert decide("a", {"new_task": [new("plan", maps=[{"target": "domain:step", "kind": "realization"}])],
+                        "new_domain": [new("step")]}) == 0
+    assert [m["target"] for m in _maps(cfg, "plan")] == ["task:plan"]
+    assert decide("b", {"new_domain": [new("plan")]}) == 0
+    assert "plan" not in {c["id"] for c in _level(seeds, "task")["concepts"]}
+    assert "plan" in {c["id"] for c in _level(seeds, "domain")["concepts"]}
+    assert "domain:plan" in [m["target"] for m in _maps(cfg, "plan")]
+    assert "task:plan" not in [m["target"] for m in _maps(cfg, "plan")]
+    assert decide("c", {"new_domain": [new("plan")], "new_task": [new("plan")]}) == 1
+
+
+def test_task_relations_order_and_cross_levels(study, tmp_path):
+    cfg, fr, seeds, decide, new = _grow(study, tmp_path)
+    assert decide("a", {"new_task": [new("plan"), new("step")], "new_domain": [new("gate")],
+                        "relations": [["plan", "precedes", "step", "comes before", ["alpha"]],
+                                      ["step", "dependsOn", "gate", "guarded by", ["alpha"]],
+                                      ["gate", "uses", "task:step", "checks", ["alpha"]]]}) == 0
+    t, d = _level(seeds, "task"), _level(seeds, "domain")
+    assert {(r["from"], r["type"], r["to"]) for r in t["relations"]} == \
+        {("plan", "precedes", "step"), ("step", "dependsOn", "domain:gate")}
+    assert [(r["from"], r["to"]) for r in d["relations"]] == [("gate", "task:step")]
+    assert decide("b", {"relations": [["nothing", "uses", "gate", "x", ["alpha"]]]}) == 1
+    # the store takes them, in the order domain, task
+    r = WriteRoute(cfg, MemoryEngine(), log_path=tmp_path / "ops.jsonl")
+    g = Graph().parse(ROOT / "kit" / "vocab.ttl")
+    g.parse(data=r.preset.levels_turtle(), format="turtle")
+    r.import_pinned("kit/core", g)
+    r.import_pinned("upper/gufo")
+    plain = {**d, "relations": []}
+    r.write("shared/domain", to_graph(plain, cfg, r.preset), op="replace", reason="t")
+    r.write("shared/task", to_graph(t, cfg, r.preset), op="replace", reason="t")
+    r.write("shared/domain", to_graph(d, cfg, r.preset), op="replace", reason="t")
+
+
+def test_support_kinds_and_a_concept_taken_out_of_the_support(study, tmp_path):
+    cfg, fr, seeds, decide, new = _grow(study, tmp_path)
+    how = {"kind": "partial", "overlap": "both hold context", "differs": "one is wider"}
+    assert decide("a", {"new_domain": [new("session", support=["alpha:session", "alpha:step"],
+                                           support_kinds={"alpha:step": how})]}) == 0
+    step = _maps(cfg, "step")[0]
+    assert step["kind"] == "partial" and step["overlap"] == "both hold context"
+    assert _maps(cfg, "session")[0]["kind"] == "specialization"
+    assert decide("b", {"new_domain": [new("session")]}) == 0
+    assert _maps(cfg, "step") == [] and len(_maps(cfg, "session")) == 1
+
+
+def _reviewable(study, tmp_path):
+    from ontologizer.core import report, review
+    cfg, fr, seeds, decide, new = _grow(study, tmp_path)
+    assert decide("a", {"new_domain": [new("session"), new("step")],
+                        "relations": [["step", "uses", "session", "runs in", ["alpha"]]]}) == 0
+    run = _run(study)
+    report.stability(run, fr)
+    review.build(run, fr)
+    return cfg, fr, seeds, decide, new, run, review
+
+
+def _verdicts(run, verdict="accept", **only):
+    p = run.path("review.yaml")
+    rv = yaml.safe_load(p.read_text())
+    for i in rv["items"] + rv["relations"]:
+        if not i["verdict"]:
+            i["verdict"] = only.get(i["ref"], verdict)
+            if i["verdict"] != "accept":
+                i["comment"] = "wrong"
+    p.write_text(yaml.safe_dump(rv))
+    return rv
+
+
+def test_review_covers_relations(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable(study, tmp_path)
+    rv = yaml.safe_load(run.path("review.yaml").read_text())
+    rel = rv["relations"][0]
+    assert rel["ref"] == "domain:step--uses--domain:session" and rel["counterpart"] is False
+    for i in rv["items"]:
+        i["verdict"] = "accept"
+    run.path("review.yaml").write_text(yaml.safe_dump(rv))
+    with pytest.raises(review.ReviewError, match="step--uses"):
+        review.apply(run, "reviewer")
+    _verdicts(run, **{rel["ref"]: "reject"})
+    out = review.apply(run, "reviewer")
+    assert out["relations_rejected"] == 1 and _level(seeds, "domain")["relations"] == []
+
+
+def test_a_project_relation_counts_as_a_counterpart(study, tmp_path):
+    cfg, fr, seeds, decide, new = _grow(study, tmp_path)
+    assert decide("a", {"new_domain": [new("session"), new("step")],
+                        "relations": [["step", "uses", "session", "runs in", ["alpha"]]]}) == 0
+    f = cfg.path("application") / "alpha.json"
+    d = json.loads(f.read_text())
+    d["relations"] = [{"from": "step", "to": "session", "type": "uses", "evidence": []}]
+    save_json(f, d)
+    from ontologizer.core import report, review
+    run = _run(study)
+    report.stability(run, fr)
+    review.build(run, fr)
+    assert yaml.safe_load(run.path("review.yaml").read_text())["relations"][0]["counterpart"] is True
+
+
+def test_a_verdict_stands_only_while_its_subject_is_unchanged(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable(study, tmp_path)
+    _verdicts(run)
+    review.apply(run, "reviewer")
+    assert decide("b", {"new_domain": [{**new("step"), "def": "Step is here, now otherwise."}]}) == 0
+    assert review.build(run, fr)["open"] == 1
+    rv = yaml.safe_load(run.path("review.yaml").read_text())
+    open_ = [i["ref"] for i in rv["items"] + rv["relations"] if not i["verdict"]]
+    assert open_ == ["domain:step"]
+
+
+def test_review_since_carries_accepted_verdicts_of_an_earlier_run(study, tmp_path):
+    from ontologizer.core import report
+    cfg, fr, seeds, decide, new, run, review = _reviewable(study, tmp_path)
+    _verdicts(run, **{"domain:session": "revise"})
+    review.apply(run, "reviewer")
+    data = yaml.safe_load((study / "ontologizer.yaml").read_text())
+    data["process"]["run"] = "r2"
+    (study / "ontologizer.yaml").write_text(yaml.safe_dump(data))
+    r2 = _run(study)
+    report.stability(r2, fr)
+    with pytest.raises(review.ReviewError, match="--since r9"):
+        review.build(r2, fr, since="r9")
+    d = review.build(r2, fr, since="r1")
+    assert d["carried"] == 2 and d["open"] == 1       # step and the relation; the revised one is judged anew
+    rv = yaml.safe_load(r2.path("review.yaml").read_text())
+    assert [i["ref"] for i in rv["items"] if not i["verdict"]] == ["domain:session"]
+    assert next(i for i in rv["items"] if i["ref"] == "domain:step")["carried_from"] == "r1"
+    _verdicts(r2)
+    assert review.apply(r2, "reviewer")["carried"] == 2
+
+
+def test_review_flags_a_category_that_differs_and_keeps_an_accepted_comment(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable(study, tmp_path)
+    f = cfg.path("application") / "alpha.json"
+    d = json.loads(f.read_text())
+    next(c for c in d["concepts"] if c["id"] == "step")["upper_category"] = "Role"
+    save_json(f, d)
+    review.build(run, fr)
+    rv = yaml.safe_load(run.path("review.yaml").read_text())
+    by = {i["ref"]: i for i in rv["items"]}
+    assert by["domain:step"]["category_differs"] == ["Role"] and by["domain:session"]["category_differs"] == []
+    by["domain:step"]["comment"] = "kept: it has identity"
+    run.path("review.yaml").write_text(yaml.safe_dump(rv))
+    _verdicts(run)
+    review.apply(run, "reviewer")
+    step = next(c for c in _level(seeds, "domain")["concepts"] if c["id"] == "step")
+    assert "kept: it has identity" in step["note"]
+
+
+def test_second_opinion_on_a_category_sees_the_parent():
+    from ontologizer.core.mapping import _concept
+    c = {"label": "A", "definition": "d", "upper_category": "SubKind", "broader": ["b"]}
+    assert _concept(c)["broader"] == ["b"]
+    assert "broader" not in _concept({**c, "broader": []})
+
+
+def test_an_answer_file_of_the_wrong_shape_is_refused(study):
+    from ontologizer.core import report
+    _approve(study)
+    run, fr = _run(study), Frame.load(_cfg(study))
+    run.path("cq.yaml").parent.mkdir(parents=True, exist_ok=True)
+    run.path("cq.yaml").write_text(yaml.safe_dump({"run": "r1", "questions": {"cq1": {"status": "answered"}}}))
+    with pytest.raises(FrameError, match="questions: not a question"):
+        report._cq_status(run, fr)
+    run.path("cq.yaml").write_text(yaml.safe_dump({"cq1": {"status": "done"}}))
+    with pytest.raises(FrameError, match="cq1.status"):
+        report._cq_status(run, fr)
+    run.path("cq.yaml").write_text(yaml.safe_dump({"reviewer": "x", "cq1": {"status": "partial", "note": "n"}}))
+    assert report._cq_status(run, fr)[0]["status"] == "partial"
+
+
+def test_frame_keeps_one_name_and_origins_apart():
+    assert any("config's project" in e for e in check(FRAME, project="other")) and check(FRAME, project="study") == []
+    assert any("origin" in e for e in check(ONE_SOURCE.replace(", origin: a note", "")))
+    two = FRAME.replace("families:\n", "sources:\n  beta: {kind: description, origin: x, derived_from: alpha}\nfamilies:\n", 1)
+    assert any("not independent" in e for e in check(two))
+    same = FRAME.replace("families:\n", "sources:\n  gamma: {kind: description, origin: x, derived_from: beta}\nfamilies:\n", 1)
+    assert check(same) == []
+    assert any("derived_from" in e for e in check(same.replace("derived_from: beta", "derived_from: nobody")))
+
+
+def test_a_source_may_be_a_directory_of_a_larger_repository(tmp_path):
+    from ontologizer.adapters.evidence.checkout import Checkout
+    from ontologizer.core.verify import UNKNOWN_COMMIT, read_at
+    _git_repo(tmp_path / "owner", {"sources/note/a.txt": "one\ntwo\n", "other.txt": "x\n"})
+    env = ["-c", "user.email=t@example.invalid", "-c", "user.name=t"]
+    sha = Checkout({"root": "sources"}, base=tmp_path / "owner").source_version("note")
+    assert sha
+    (tmp_path / "owner" / "other.txt").write_text("y\n")
+    subprocess.run(["git", "-C", str(tmp_path / "owner"), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(tmp_path / "owner"), *env, "commit", "-qm", "later"], check=True)
+    assert Checkout({"root": "sources"}, base=tmp_path / "owner").source_version("note") == sha  # untouched by the commit
+    root = tmp_path / "owner" / "sources" / "note"
+    assert "two" in read_at(root, sha, "a.txt", "2")
+    assert read_at(root, "0" * 40, "a.txt", "2") is UNKNOWN_COMMIT
+    assert Checkout({"root": "."}, base=tmp_path / "nowhere").source_version("x") is None
+
+
+def test_import_of_a_foreign_ontology_into_a_role_graph_is_refused(study, tmp_path, monkeypatch, capsys):
+    from argparse import Namespace
+
+    from ontologizer import cli
+    cfg = _cfg(study)
+    r = WriteRoute(cfg, MemoryEngine(), log_path=tmp_path / "ops.jsonl")
+    monkeypatch.setattr(cli, "_route", lambda a: r)
+    ttl = tmp_path / "foreign.ttl"
+    ttl.write_text("@prefix owl: <http://www.w3.org/2002/07/owl#> .\n<urn:x:A> a owl:Class .\n")
+    assert cli.cmd_import_graph(Namespace(path="shared/domain", file=str(ttl))) == 3
+    assert "none of the kit's vocabulary" in capsys.readouterr().err and r.engine.writes == 0
+
+
+def _update_setup(study, tmp_path):
+    from ontologizer.core import update_check as uc
+    cfg, fr, seeds, decide, new = _grow(study, tmp_path)
+    assert decide("a", {"new_domain": [new("session"), new("step"), new("gate")],
+                        "relations": [["step", "uses", "session", "runs in", ["alpha"]],
+                                      ["step", "dependsOn", "gate", "guarded by", ["alpha"]]]}) == 0
+    r = WriteRoute(cfg, MemoryEngine(), log_path=tmp_path / "ops.jsonl")
+    g = Graph().parse(ROOT / "kit" / "vocab.ttl")
+    g.parse(data=r.preset.levels_turtle(), format="turtle")
+    r.import_pinned("kit/core", g)
+    r.import_pinned("upper/gufo")
+    r.write("shared/domain", to_graph(_level(seeds, "domain"), cfg, r.preset), op="replace", reason="t")
+    r.release(["shared/domain"], "0.1")
+    data = yaml.safe_load((study / "ontologizer.yaml").read_text())
+    data["process"].update(run="r2", update_check=True)
+    (study / "ontologizer.yaml").write_text(yaml.safe_dump(data))
+    cfg = _cfg(study)
+    base = cfg.root / "runs" / "r1"
+    q = [{"id": "cq1", "status": "answered"}, {"id": "cq2", "status": "partial"}]
+    save_json(base / "report.json", {"competency_questions": q, "metrics": {"consistency_clashes": 0}})
+
+    def report_now(statuses=("answered", "partial"), clashes=0):
+        rq = [{"id": f"cq{n + 1}", "status": s} for n, s in enumerate(statuses)]
+        save_json(cfg.root / "runs" / "r2" / "report.json", {"competency_questions": rq,
+                                                            "metrics": {"consistency_clashes": clashes}})
+    return uc, cfg, fr, seeds, decide, new, r, report_now
+
+
+def test_update_check_clean_and_gate(study, tmp_path):
+    uc, cfg, fr, seeds, decide, new, r, report_now = _update_setup(study, tmp_path)
+    run = _run(study)
+    assert uc.require_update_check(cfg, r.engine)[0] is False      # an earlier release, no check yet
+    report_now()
+    d = uc.check(run, fr, r.engine, "0.1", "r1")
+    assert d["blocking"] == [] and d["kept"] == 3
+    assert uc.require_update_check(cfg, r.engine)[0] is True
+    assert decide("b", {"new_domain": [new("plan")]}) == 0          # a later edit invalidates it
+    assert "changed after" in uc.require_update_check(cfg, r.engine)[1]
+    with pytest.raises(uc.UpdateCheckError, match="new run"):
+        uc.check(run, fr, r.engine, "0.1", "r2")
+    with pytest.raises(uc.UpdateCheckError, match="is it released"):
+        uc.check(run, fr, r.engine, "9.9", "r1")
+
+
+def test_update_check_blocks_what_went_missing(study, tmp_path):
+    uc, cfg, fr, seeds, decide, new, r, report_now = _update_setup(study, tmp_path)
+    run = _run(study)
+    for name in ("domain",):
+        d = _level(seeds, name)
+        d["concepts"] = [c for c in d["concepts"] if c["id"] != "gate"]   # silently, not through a decision
+        d["relations"] = []
+        save_json(seeds[name], d)
+    report_now(statuses=("partial", "partial"), clashes=2)
+    out = uc.check(run, fr, r.engine, "0.1", "r1")
+    text = "\n".join(out["blocking"])
+    assert "domain:gate: removed with no reason" in text and "domain:step uses domain:session: relation gone" in text
+    assert "question cq1: was answered, now partial" in text and "2 clash" in text
+    assert uc.require_update_check(cfg, r.engine)[0] is False
+    assert "Blocking" in run.path("update-check.md").read_text()
+
+
+def test_update_check_accepts_recorded_removals_and_judges_changes(study, tmp_path):
+    uc, cfg, fr, seeds, decide, new, r, report_now = _update_setup(study, tmp_path)
+    run = _run(study)
+    assert decide("b", {"removed": [{"ref": "domain:gate", "reason": "not a thing", "replaced_by": ["domain:step"]}],
+                        "remove_relations": [{"relation": ["step", "uses", "session"], "reason": "unsupported"}]}) == 0
+    assert decide("c", {"new_domain": [{**new("session"), "def": "Nothing like the cited lines."}]}) == 0
+    report_now()
+    out = uc.check(run, fr, r.engine, "0.1", "r1")
+    assert [x["ref"] for x in out["removed"]] == ["domain:gate"] and out["changed"] == ["domain:session"]
+    assert out["evidence"]["domain:session"]["evidence"] == 1
+    assert out["blocking"] == [] and out["evidence"]["domain:session"]["supported"] == 1
+    # a changed concept the cited lines do not support blocks
+    assert decide("d", {"new_domain": [{**new("session", label="Elsewhere"), "def": "Not in the lines."}]}) == 0
+    report_now()
+    out = uc.check(run, fr, r.engine, "0.1", "r1")
+    assert any("domain:session: changed, and none of its 1 cited" in b for b in out["blocking"])
+
+
+def test_update_check_is_not_asked_of_a_first_release_or_without_the_switch(study, tmp_path):
+    from ontologizer.core.update_check import require_update_check
+    uc, cfg, fr, seeds, decide, new, r, report_now = _update_setup(study, tmp_path)
+    r.engine.drop_graph(cfg.graph_iri("shared/domain@0.1"))
+    assert require_update_check(cfg, r.engine) == (True, "first release")
+    data = yaml.safe_load((study / "ontologizer.yaml").read_text())
+    data["process"].pop("update_check")
+    (study / "ontologizer.yaml").write_text(yaml.safe_dump(data))
+    assert require_update_check(_cfg(study), r.engine) == (True, "not required")
+
+
+def test_release_compare_takes_the_working_levels(study, tmp_path):
+    from ontologizer.core import release_compare as rc
+    uc, cfg, fr, seeds, decide, new, r, report_now = _update_setup(study, tmp_path)
+    assert decide("b", {"new_domain": [new("plan")]}) == 0
+    run = _run(study)
+    c = rc.compare(cfg, r.engine, "0.1", rc.WORKING, run, frame=fr)
+    assert c["b"] == "working" and c["counts"].get("added") == 1 and c["metrics"]["b"]["concepts"] == 4

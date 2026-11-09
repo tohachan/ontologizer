@@ -192,7 +192,7 @@ uv run --project ../ontologizer ontologizer export-md                    # → e
 | `status` | Shows the loaded config and every graph's mode, owner and size |
 | `bootstrap` | Imports the pinned `upper/gufo` and `kit/core` |
 | `validate FILE.json` / `ingest FILE.json [--dry-run]` | Checks the extraction against the schema and SHACL. `ingest` then writes it to its graph |
-| `export-graph PATH [--turtle]` / `import-graph PATH FILE.ttl` | Copies one graph out of the store / replaces one graph from a file |
+| `export-graph PATH [--turtle]` / `import-graph PATH FILE.ttl` | Copies one graph out of the store / replaces one graph from a file. A file with none of the kit's vocabulary is refused in a graph with a role: the kit would see nothing in it |
 | `release PATH … VER` | Releases a set of research graphs as one immutable version `PATH@VER`. Release terms get their own IRIs (`…<path>@<ver>:<id>`, linked to the working term by `dcterms:isVersionOf`), and references inside the set follow them, so versions never mix in queries or reasoning; a reference to a working graph with no release at that version is refused. `release --migrate-iris VER` rewrites releases made before this rule |
 | `export-md` | Writes markdown for the owned graphs plus comparison views; the output is deterministic |
 | `query FILE.rq` / `query 'SPARQL'` | Runs a SPARQL SELECT over the store and prints one row per line |
@@ -223,8 +223,13 @@ A corpus is analysed in stages, each with a gate and metrics: [`docs/process.md`
 | 7 stability and report | `stability`, `report`, `report --compare A B`, `release-compare A B [--run-a ID]` |
 | 8 review and calibration | `review build`, `review apply --by MODEL --effort E`, `gold sample NAME`, `gold calibrate FILE`; review and gold labels by a strong agent, not people |
 | 9 overlay | in the target owner's config with `process.overlay: true`: stages 2–4 and 6 on the target, then `overlay [--previous FILE --compare FILE]` |
+| 10 update | a new run for the source or correction, then `update-check BASE --base-run RUN`, `release-compare BASE working`, `review build --since RUN` |
 
 Narrow decisions (same concept? which category? do these lines support the claim?) go through the decision port, stage by stage in mode `jev`, `llm` or `off`. Every decision is logged in the run directory. Cross-harness runs (e.g. Codex) exchange files only: [`docs/cross-harness.md`](docs/cross-harness.md).
+
+### A topic that grows from any sources
+
+An ontology need not start from a corpus of code. A topic can start from one description, model or set of notes, and improve with each new source or correction: `admission_families: 1` in the frame lets a concept enter the shared levels from one source, and it stays a hypothesis until an independent source confirms it. Each update is a new run, held to the last release by `update-check` (blocks on removals without a reason, a changed concept its evidence does not support, a question that lost its answer, a new clash), which needs no new source. Set `process.update_check: true` to make `release` require it. Details: [`docs/process.md`](docs/process.md) §10.
 
 ### Adapters
 
@@ -283,10 +288,10 @@ my-index = "my_adapters.index:factory"     # factory(conf: dict, *, base: Path) 
 
 | Path | Content |
 | --- | --- |
-| `src/ontologizer/core/` | Config cascade, levels and SHACL generation, extraction schema and converter, write route, consolidation; the process stages (`frame`, `inventory`, `brief`, `reconcile`, `mapping`, `grouping`, `verify`, `report`, `review`), runs and decisions (`run`), adapter loading (`plugins`) |
+| `src/ontologizer/core/` | Config cascade, levels and SHACL generation, extraction schema and converter, write route, consolidation; the process stages (`frame`, `inventory`, `brief`, `reconcile`, `mapping`, `grouping`, `verify`, `report`, `review`, `update_check`), runs and decisions (`run`), adapter loading (`plugins`) |
 | `src/ontologizer/ports/` | Engine, exporter, evidence, inventory and decision ports |
-| `src/ontologizer/adapters/` | Open Ontologies engine adapter, markdown exporter, built-in `checkout` evidence, `graphify` inventory and `jev` decision adapters |
-| `templates/` | `frame.md` (stage 0) and the extraction brief (stage 2) |
+| `src/ontologizer/adapters/` | Open Ontologies engine adapter, markdown exporter, built-in `checkout` evidence, `graphify` and `rdf` inventory and `jev` decision adapters |
+| `templates/` | `frame.md` (stage 0) and the extraction briefs, one for a system's source and one for a description (stage 2) |
 | `presets/` | Level presets as data (`guarino-4.yaml`) |
 | `kit/vocab.ttl`, `vendor/` | Kit vocabulary (`ok:`), pinned gUFO 1.0.0 |
 | `skills/` | `frame-study` (stage 0), `analyse-corpus` (stages 1–9, release comparison, ablation), `map-repo` (superseded by the staged process; kept as the record of the first run), `query-ontology` (read-only: explore the store, check a concept against it, answer within its vocabulary) |

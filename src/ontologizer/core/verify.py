@@ -25,7 +25,7 @@ from ontologizer.core.run import Run, load_json, now, save_json
 from ontologizer.core.shared import application_file
 from ontologizer.core.sources import evidence_source
 from ontologizer.ports.decisions import Question
-from ontologizer.ports.evidence import read_lines, slice_lines
+from ontologizer.ports.evidence import git_version, read_lines, slice_lines
 
 PAD = 3
 LIMIT = 160
@@ -48,11 +48,11 @@ def read_at(root: Path | None, commit: str | None, path: str, lines: str | None)
     or lines do not exist at that commit; UNKNOWN_COMMIT when the checkout lacks the commit."""
     if root is None:
         return UNKNOWN_COMMIT
-    if commit and (root / ".git").exists():
+    if commit and git_version(root) is not None:
         if not _has_commit(root, commit):
             return UNKNOWN_COMMIT
-        try:
-            blob = subprocess.run(["git", "-C", str(root), "show", f"{commit}:{path}"], capture_output=True,
+        try:   # `./`: relative to the source, which may be a directory inside a larger repository
+            blob = subprocess.run(["git", "-C", str(root), "show", f"{commit}:./{path}"], capture_output=True,
                                   check=True).stdout.decode(errors="replace")
         except (OSError, subprocess.CalledProcessError):
             return None

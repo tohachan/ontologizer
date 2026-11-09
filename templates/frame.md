@@ -1,6 +1,6 @@
 ---
 # Machine-readable part of the frame; `ontologizer frame check` validates it.
-study: my-study                # the owner's project name
+study: my-study                # the config's `project`: one name, chosen for the topic
 preset: guarino-4              # levels preset of the kit
 domains:
   - id: example-domain
@@ -20,7 +20,7 @@ families:                      # the comparison corpus by architectural family
 # admission_families: 1         # optional: families a concept needs to enter the shared levels (default: the
                                # preset's confirmation threshold); below that threshold it stays a hypothesis
 # sources:                       # optional, per project: `description` for a text about a subject, not a system
-#   project-3: {kind: description, origin: where the text comes from}
+#   project-3: {kind: description, origin: where the text comes from}   # a retelling adds `derived_from: <source>`
 overlay: []                    # projects mapped onto a release later; never read while building shared levels
 competency_questions:
   - id: cq1

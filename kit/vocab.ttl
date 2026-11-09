@@ -86,6 +86,7 @@ ok:owns         a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:pref
 ok:triggers     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "triggers"@en .
 ok:hasPhase     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "has phase"@en .
 ok:associatedWith a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "associated with"@en .
+ok:precedes     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "precedes"@en .
 
 ## Variation points --------------------------------------------------------
 ok:VariationDimension a owl:Class ; rdfs:subClassOf skos:ConceptScheme ; rdfs:label "Variation dimension"@en .

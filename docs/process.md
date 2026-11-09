@@ -1,6 +1,6 @@
-# Analysis process: stages 0–9
+# Analysis process: stages 0–10
 
-How an owner repository turns a corpus of software projects into a level-aware ontology with measured reliability. The process does not depend on the topic of the corpus. Everything topic-specific comes from the frame (stage 0) and the owner's config.
+How an owner repository turns a corpus of software projects, or whatever sources exist on a topic, into a level-aware ontology with measured reliability. The process does not depend on the topic of the corpus. Everything topic-specific comes from the frame (stage 0) and the owner's config.
 
 The process replaces a single pass in which seeds anchored the agents, coverage was the agent's choice, each project was extracted once, consolidation grouped by words and nothing was checked independently. Each stage below has an input, an output, the party that does the work, and a gate that must hold before the next stage starts. Each stage writes its result into a run directory, so two runs can be compared mechanically.
 
@@ -73,8 +73,10 @@ A research agent writes `frame.md` from the template `templates/frame.md`. The f
 - what is out of scope;
 - optionally, the **variation dimensions**: the decisions projects differ on, each with its values. Every extraction reports the values its project takes, with evidence. `ontologizer frame variation` writes them into the shared variation level;
 - optionally, `admission_families`, when the ontology grows from whatever sources exist instead of a comparison corpus: the families a concept needs to enter the shared levels (see §5);
-- optionally, `sources`: per project, `kind: description` for a text about a subject rather than a system's own source (see §2), with its `origin`;
+- optionally, `sources`: per project, `kind: description` for a text about a subject rather than a system's own source (see §2), with its `origin`, and `derived_from` when it retells another source of the corpus: it must then sit in that source's family;
 - optionally, **design targets**: a system the study should help build or choose, described as requirements. Each requirement is a competency question tagged `target: <id>`. The run report answers it per project (`full`, `partial`, `none`), names the concepts that realize it — the parts to reuse — and ranks the projects by fit.
+
+The frame's `study` repeats the config's `project`: the name comes from there, since graphs and IRIs follow it, and is chosen when the topic is created, never taken from a source.
 
 `ontologizer frame check` validates the required sections and the machine-readable header. `ontologizer gate approve frame --by <name>` records the owner's approval with the frame's sha256. Stage 1 refuses to start when the approval is missing or the frame has changed since.
 
@@ -92,7 +94,7 @@ Each project is extracted at least twice, independently, by different models: Op
 
 The brief also lists the frame's variation dimensions. The extraction records each value the project takes, with evidence, and proposes a new value when none fits.
 
-A source with `kind: description` gets its own brief. What it says is its author's claim, its evidence is `kind: doc`, and what extraction JSON cannot carry (rules, limits, recommendations, sample systems) goes into `caveats`, not into definitions. An adapter or a converter is not needed for such a source to be cited: it only has to be text in a git checkout. The built-in `rdf` inventory adapter lists the classes and SKOS concepts of an RDF source, so coverage is measured there too.
+A source with `kind: description` gets its own brief. What it says is its author's claim, its evidence is `kind: doc`, and what extraction JSON cannot carry (rules, limits, recommendations, sample systems) goes into `caveats`, not into definitions. An adapter or a converter is not needed for such a source to be cited: it only has to be text under git, either its own repository or a directory committed inside a larger one, such as the owner's. The built-in `rdf` inventory adapter lists the classes and SKOS concepts of an RDF source, so coverage is measured there too.
 
 Extraction no longer maps to the shared levels: `maps_to` moves to stage 4. Old extraction files with `maps_to` still load. Each concept may cite the inventory candidates it covers (`inventory: [ids]`). There is no cap on the number of concepts unless the owner sets `process.max_concepts` for a pilot.
 
@@ -114,7 +116,13 @@ Concepts without a mapping are grouped by meaning. Code proposes candidate pairs
 
 A shared concept needs support from **at least two architectural families** of the frame. Two projects from one family count once.
 
-Two things are kept apart: *admission* (may a concept enter the shared levels) and *confirmation* (do independent families stand behind it, the preset's `domain_confirmation_min_projects`). By default they are the same number. A frame can lower admission (`admission_families: 1`) when there may be only one source. Then a concept without confirmation is marked `unconfirmed` in stage 7, and an `accept` in stage 8 leaves it a `hypothesis`. Every concept of the source is then a candidate, including those in `singletons`, and the Opus agent still decides which to take and why. Families count origins: a retelling of a source belongs to the source's family. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target.
+Two things are kept apart: *admission* (may a concept enter the shared levels) and *confirmation* (do independent families stand behind it, the preset's `domain_confirmation_min_projects`). By default they are the same number. A frame can lower admission (`admission_families: 1`) when there may be only one source. Then a concept without confirmation is marked `unconfirmed` in stage 7, and an `accept` in stage 8 leaves it a `hypothesis`. Every concept of the source is then a candidate, including those in `singletons`, and the Opus agent still decides which to take and why. Families count origins: a retelling of a source belongs to the source's family.
+
+A decision file adds to the decisions before it, so a later run lists only what changes:
+- a concept named again replaces its earlier form, and a concept decided on the other level moves there, with the mappings to it;
+- `removed: [{ref, reason, replaced_by}]` takes a concept out, with its relations and the mappings to it;
+- `relations` join the existing ones, on the level of their `from` end, so activities can be ordered (`precedes`) and either end may sit on the other level (`task:<id>` or `domain:<id>` when an id is on both). `remove_relations: [{relation: [from, type, to], reason}]` takes one out;
+- `support_kinds: {<ref>: <kind> | {kind, overlap, differs}}` says how a supporting concept relates when it is not simply a specialization. A concept taken out of `support` loses the mapping this step gave it. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target.
 
 ### 6. Verification
 
@@ -134,7 +142,11 @@ Leave-one-out: for each project, the support of every shared concept is recomput
 
 ### 8. Review and calibration
 
-`ontologizer review build` writes `review.yaml`. It lists every domain and task concept, with no cap, together with its support, families, stability, verification share and evidence. The reviewing agent checks each one in the source and marks it `accept`, `reject` or `revise`. `ontologizer review apply --by <model> --effort <effort>` makes the accepted ones `asserted` in the shared-level files and records the review gate with the reviewer. Only after that does the owner run `release`.
+`ontologizer review build` writes `review.yaml`. It lists every domain and task concept, with no cap, together with its support, families, stability, verification share and evidence, and every relation of the shared levels. The reviewing agent checks each one in the source and marks it `accept`, `reject` or `revise`. Two things are flagged: `category_differs`, when a supporting project concept has another category (a recheck in stage 6 does not reach the shared concept), and `counterpart: false`, when no relation joins the project concepts behind a relation's ends.
+
+A verdict stands only while what it judged is unchanged. After an edit, `review build` reopens just what changed, so a correction needs no second full pass; a fresh pass tends to rewrite accepted wording rather than converge. `review build --since <run>` carries the accepted verdicts of an earlier run in the same way, and the gate records how many were carried.
+
+Recording the gate is the owner's call: the reviewer's verdicts become the record only when the owner asks for `review apply` or runs it. `ontologizer review apply --by <model> --effort <effort>` makes the accepted ones `asserted` in the shared-level files and records the review gate with the reviewer. Only after that does the owner run `release`.
 
 `ontologizer gold sample` draws a gold set: 80 items by default (`process.gold_size`), mixing evidence claims, categories, same-concept pairs (stages 3, 5 and `compare`) and triage classes. A strong agent that made none of the logged decisions labels it and records itself as `labelled_by: {model, effort, harness}`. `ontologizer gold calibrate` refuses a gold set without `labelled_by`, or labelled by a model that made any of its decisions. It compares the decisions with the labels and chooses each threshold for accuracy. `triage_keep` is chosen among the thresholds that lose at most `decisions.triage_max_loss` (default 0.03) of the architectural candidates. The thresholds and the measured accuracy are written to `calibration.yaml`, and the gold gate is recorded with the labeller. A kind with fewer than 20 items stays provisional and is reported, not applied, unless `process.apply_provisional` says so.
 
@@ -149,6 +161,35 @@ The run lives in the target owner's config:
 - The extraction brief forbids the target's earlier analysis (its owner directory), so earlier results do not anchor the extraction.
 
 `ontologizer overlay` writes `runs/<run>/overlay.{md,json}`: for each shared concept the target concepts that realize it and how, the concepts without a counterpart and the shared concepts the target lacks. With `--previous <earlier application file> --compare <release-compare JSON>` it also lists, per shared concept of the new release, whether the target realized it before (through the correspondence of the releases) and now: `still realized`, `newly realized`, `no longer realized`, `still lacking`, or `new concept, realized|lacking`, and the earlier mappings whose target was dropped.
+
+### 10. Growing an ontology
+
+An ontology of a topic does not wait for a corpus. It starts from what exists and improves with each source or correction, and nothing is confirmed until an independent source says so. Entering the shared levels and being confirmed are separate (§5).
+
+**First version.** Create the owner with its name in the config (`project:`), and frame it with `admission_families: 1` and the source under `sources:`. Commit the source as text under git. For an RDF source, the `rdf` inventory adapter lists its classes and SKOS concepts, so coverage is measured. Stages 1–8 run as usual: all the source's concepts are candidates in stage 5, and each stays a hypothesis.
+
+**Each update is a new run.** A new source, or a correction written up as one (a file with its author and reason), goes through stages 1–4 against the current shared levels. Extraction still sees no shared vocabulary. The mapping then says what happens:
+
+| Stage 4 | Effect |
+| --- | --- |
+| `equivalence` | the shared concept gains an origin; a second family confirms it, and the next review can make it `asserted` |
+| `specialization` | a candidate for a narrower concept |
+| none | a candidate for a new concept in stage 5 |
+| `partial` or a contradiction | `disputed`; the earlier claim is not overwritten silently |
+
+A new family means a new frame, so its approval is asked for again.
+
+**The checks.** Before a release, `ontologizer update-check <base release> --base-run <the run that built it>` holds the working levels to the release. It needs no new source. It blocks on:
+- a concept removed, or a relation gone, with no recorded reason;
+- a changed concept that none of its cited passages supports, judged through the decision port at the cited commits;
+- a competency question that lost its answer since the base run. Give questions a `query:`, so this does not rest on hand-written answers;
+- a new clash, or a report older than the shared levels.
+
+The result is `runs/<run>/update-check.{json,md}` and a recorded gate. With `process.update_check: true`, `release` of a level with an earlier release requires that gate, clean, over the files as they are; `--unreviewed` overrides it and is recorded. `release-compare <base> working` compares by meaning before the release, for concepts renamed or split.
+
+Then `review build --since <base run>` and the review of what changed, as in §8.
+
+**Foreign ontologies.** `import-graph` refuses a file with none of the kit's vocabulary in a graph with a role: the kit would see nothing there, and the write would replace the graph. To analyse such a file, make it a source as above. To keep it verbatim, import it into a graph with no role.
 
 ## Model roles
 
@@ -212,5 +253,6 @@ The report also records, per stage, the decision mode and the number of decision
 | 7 | `ontologizer stability`, `ontologizer report`, `ontologizer report --compare A B`, `ontologizer release-compare A B [--run-a ID]` |
 | 8 | `ontologizer review build`, `ontologizer review apply`, `ontologizer gold sample`, `ontologizer gold calibrate` |
 | 9 | in the target owner's overlay run: `brief`, `reconcile`, `map`, `verify` on the target, then `ontologizer overlay [--previous FILE --compare FILE]` |
+| 10 | `ontologizer update-check BASE --base-run RUN`, `ontologizer release-compare BASE working`, `ontologizer review build --since RUN` |
 
 Each command accepts `--run ID` (default `process.run` in the config). The agent-side steps are in the skill [`analyse-corpus`](../skills/analyse-corpus/SKILL.md).

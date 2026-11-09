@@ -12,7 +12,7 @@ from ontologizer.core.config import GUFO, KIT
 STATUSES = ("asserted", "inferred", "hypothesis", "disputed")
 MAPPING_KINDS = ("equivalence", "specialization", "roleOf", "realization", "partial")
 RELATION_TYPES = ("partOf", "dependsOn", "uses", "produces", "participatesIn", "mediates",
-                  "owns", "triggers", "hasPhase", "associatedWith")
+                  "owns", "triggers", "hasPhase", "associatedWith", "precedes")
 EVIDENCE_KINDS = ("code", "doc", "test", "config", "graph", "plan")
 
 PREFIXES = f"""@prefix ok: <{KIT}> .

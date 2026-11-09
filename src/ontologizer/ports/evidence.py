@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Protocol
 
@@ -16,6 +17,22 @@ class EvidenceSource(Protocol):
         ...
 
     def query(self, repo: str, question: str, budget: int = 1500) -> str: ...
+
+
+def git_version(path: Path) -> str | None:
+    """The commit a source directory is at: HEAD of its own repository, or, for a directory inside a larger
+    repository, the last commit that touched it. None outside git or before the first commit."""
+    def git(*args: str) -> str | None:
+        try:
+            return subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, check=True).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+    top = git("rev-parse", "--show-toplevel")
+    if top is None:
+        return None
+    if Path(top).resolve() == Path(path).resolve():
+        return git("rev-parse", "HEAD")
+    return git("log", "-1", "--format=%H", "--", ".") or None
 
 
 def line_ranges(lines: str) -> list[tuple[int, int]] | None:

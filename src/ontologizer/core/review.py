@@ -1,13 +1,16 @@
-"""Stage 8: owner review, gold set and calibration (docs/process.md §8).
+"""Stage 8: review, gold set and calibration (docs/process.md §8).
 
 - `review build` lists every domain and task concept (no cap) with its
   support, families, stability, the verification share of its supporting
-  concepts and their evidence, for the owner to mark accept / reject / revise.
+  concepts and their evidence, and every relation of the shared levels, for
+  a strong agent to mark accept / reject / revise. A verdict stands only while
+  what it judged is unchanged, so after an edit only the changes need one;
+  `--since RUN` carries accepted verdicts over from an earlier run.
 - `review apply` makes accepted concepts `asserted`, removes rejected ones
   (and the project mappings to them), notes revisions, and records the
   `review` gate; `release` of a shared level requires that gate.
 - `gold sample` draws a stratified sample of logged decisions (evidence
-  claims, categories, same-concept pairs) for the owner to label, without
+  claims, categories, same-concept pairs) for a strong agent to label, without
   showing the model's answer.
 - `gold calibrate` compares the logged answers with the labels, chooses the
   thresholds that maximise accuracy and writes them with the measured
@@ -16,6 +19,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -43,7 +47,8 @@ def review_path(run: Run) -> Path:
     return run.path("review.yaml")
 
 
-def build(run: Run, frame: Frame) -> dict:
+def build(run: Run, frame: Frame, since: str | None = None) -> dict:
+    """`since`: an earlier run whose accepted verdicts stand for whatever has not changed since."""
     st = load_json(run.path("stability.json"), {}) or {}
     docs = application_docs(run.cfg, [p for p in frame.projects if p not in frame.overlay])
     from ontologizer.core.verify import final_items
@@ -60,27 +65,103 @@ def build(run: Run, frame: Frame) -> dict:
                               and i["final"] in ("supported", "unsupported", "missing")]
                         ok = sum(1 for i in vi if i["final"] == "supported")
                         sup.append({"concept": f"{p}:{pc['id']}", "label": pc["label"],
+                                    "category": pc.get("upper_category"),
                                     "kind": next(m["kind"] for m in pc["maps_to"] if m.get("target") == ref),
                                     "verified": f"{ok}/{len(vi)}" if vi else "unchecked",
                                     "evidence": [f"{e['path']}:{e.get('lines', '')}" for e in pc.get("evidence", [])[:2]]})
             s = (st.get("concepts") or {}).get(ref, {})
             items.append({"ref": ref, "label": c["label"], "category": c["upper_category"],
+                          "category_differs": sorted({x["category"] for x in sup if x["category"] != c["upper_category"]}),
                           "definition": c["definition"], "status": c.get("status", "hypothesis"),
                           "families": s.get("families", []), "stability": s.get("mark", "unknown"),
                           "breaks_without": s.get("breaks_without", []), "reason": (c.get("support") or {}).get("reason"),
                           "support": sup, "verdict": None, "comment": None})
+    for i in items:
+        i["fingerprint"] = _fingerprint(i)
+    relations = _relation_items(run, docs)
     doc = {"run": run.id, "built": now(),
-           "instructions": "Set `verdict` of every item to accept, reject or revise (with `comment`), then run "
-                           "`ontologizer review apply --by <name>`.", "items": items}
+           "instructions": "Set `verdict` of every item and relation with an empty one to accept, reject or revise "
+                           "(with `comment`; `revise` keeps a relation unchanged, so reject one that is wrong), "
+                           "then record the gate with `ontologizer review apply --by <name>`. A shared concept whose "
+                           "`category_differs` lists categories has a supporting project concept typed otherwise: "
+                           "keep the shared category only for a reason you state. A relation with `counterpart: "
+                           "false` has no relation between the supporting project concepts, so check it in the source.",
+           "items": items, "relations": relations}
     p = review_path(run)
     p.parent.mkdir(parents=True, exist_ok=True)
-    if p.is_file():   # keep verdicts already given
-        old = {i["ref"]: i for i in (yaml.safe_load(p.read_text()) or {}).get("items", [])}
-        for i in items:
-            if old.get(i["ref"], {}).get("verdict"):
-                i["verdict"], i["comment"] = old[i["ref"]]["verdict"], old[i["ref"]].get("comment")
+    kept = 0
+    if p.is_file():   # verdicts stand for what has not changed since they were given
+        kept = _carry(yaml.safe_load(p.read_text()) or {}, items, relations)
+    carried = 0
+    if since:
+        q = run.cfg.root / (run.cfg.data.get("process") or {}).get("runs", "runs") / since / "review.yaml"
+        if not q.is_file():
+            raise ReviewError(f"--since {since}: no review at {q}")
+        carried = _carry(yaml.safe_load(q.read_text()) or {}, items, relations, accepted_only=True, source=since)
     p.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=120))
-    return {"items": len(items), "path": str(p)}
+    open_ = sum(1 for i in items + relations if not i.get("verdict"))
+    return {"items": len(items), "relations": len(relations), "open": open_, "kept": kept, "carried": carried,
+            "path": str(p)}
+
+
+def _fingerprint(i: dict) -> str:
+    """What a verdict was given on. A verdict does not outlive a change to it."""
+    if "from" in i:
+        what = [i["ref"], i.get("label")]
+    else:
+        what = [i["ref"], i["label"], i["category"], i["definition"]]
+    return hashlib.sha256(json.dumps(what, ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+def _carry(old: dict, items: list[dict], relations: list[dict], accepted_only: bool = False,
+           source: str | None = None) -> int:
+    def same(o: dict, i: dict) -> bool:
+        if o.get("fingerprint"):
+            return o["fingerprint"] == i["fingerprint"]
+        return (o.get("definition"), o.get("category")) == (i.get("definition"), i.get("category"))  # an older file
+
+    n = 0
+    for mine, theirs in ((items, old.get("items", [])), (relations, old.get("relations", []))):
+        by_ref = {x["ref"]: x for x in theirs}
+        for i in mine:
+            o = by_ref.get(i["ref"])
+            if i.get("verdict") or not o or not o.get("verdict") or not same(o, i):
+                continue
+            if accepted_only and o["verdict"] != "accept":
+                continue
+            i["verdict"], i["comment"] = o["verdict"], o.get("comment")
+            if source or o.get("carried_from"):
+                i["carried_from"] = source or o["carried_from"]
+            n += 1
+    return n
+
+
+def _relation_items(run: Run, docs: dict[str, dict]) -> list[dict]:
+    """The relations of the shared levels, each with whether the concepts behind its ends are related."""
+    behind: dict[str, set[tuple[str, str]]] = {}
+    pairs: set[tuple[str, str, str]] = set()
+    for p, d in docs.items():
+        for pc in d["concepts"]:
+            for m in pc.get("maps_to", []):
+                if m.get("target"):
+                    behind.setdefault(m["target"], set()).add((p, pc["id"]))
+        for r in d.get("relations", []):
+            pairs.add((p, r["from"], r["to"]))
+    out = []
+    for lv, f in shared_files(run.cfg).items():
+        for r in json.loads(f.read_text()).get("relations", []):
+            a, b = _ref(lv, r["from"]), _ref(lv, r["to"])
+            seen = any((p, x, y) in pairs or (p, y, x) in pairs
+                       for p, x in behind.get(a, ()) for q, y in behind.get(b, ()) if p == q)
+            item = {"ref": f"{a}--{r['type']}--{b}", "from": a, "type": r["type"], "to": b, "label": r.get("label"),
+                    "counterpart": seen, "verdict": None, "comment": None}
+            item["fingerprint"] = _fingerprint(item)
+            out.append(item)
+    return out
+
+
+def _ref(level: str, end: str) -> str:
+    return end if ":" in end else f"{level}:{end}"
 
 
 def apply(run: Run, by: str, effort: str | None = None) -> dict:
@@ -89,10 +170,11 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
         raise ReviewError("no review.yaml: run `ontologizer review build` first")
     doc = yaml.safe_load(p.read_text()) or {}
     items = doc.get("items", [])
-    missing = [i["ref"] for i in items if i.get("verdict") not in VERDICTS]
+    relations = doc.get("relations", [])
+    missing = [i["ref"] for i in items + relations if i.get("verdict") not in VERDICTS]
     if missing:
         raise ReviewError(f"{len(missing)} item(s) without a verdict (accept|reject|revise): {missing[:10]}")
-    bad = [i["ref"] for i in items if i["verdict"] == "revise" and not i.get("comment")]
+    bad = [i["ref"] for i in items + relations if i["verdict"] == "revise" and not i.get("comment")]
     if bad:
         raise ReviewError(f"revise needs a comment: {bad[:10]}")
     verdict = {i["ref"]: i for i in items}
@@ -118,6 +200,9 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
                     unconfirmed += 1
                 else:
                     c["status"] = "asserted"
+                remark = f"Review ({by}, {run.id}): {i['comment']}"
+                if i.get("comment") and not i.get("carried_from") and remark not in c.get("note", ""):
+                    c["note"] = (c.get("note", "") + " " + remark).strip()
             elif i["verdict"] == "reject":
                 rejected.add(ref)
                 continue
@@ -126,10 +211,15 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
                 c["note"] = (c.get("note", "") + f" Review ({by}, {run.id}): {i['comment']}").strip()
             keep.append(c)
         d["concepts"] = keep
+        save_json(f, d)
+    gone_rel = {r["ref"] for r in relations if r["verdict"] == "reject"}
+    for lv, f in shared_files(run.cfg).items():   # after the loop above: a relation may reach another level
+        d = json.loads(f.read_text())
         if "relations" in d:
             d["relations"] = [r for r in d["relations"]
-                              if f"{lv}:{r['from']}" not in rejected and f"{lv}:{r['to']}" not in rejected]
-        save_json(f, d)
+                              if _ref(lv, r["from"]) not in rejected and _ref(lv, r["to"]) not in rejected
+                              and f"{_ref(lv, r['from'])}--{r['type']}--{_ref(lv, r['to'])}" not in gone_rel]
+            save_json(f, d)
     unbound = 0
     app_dir = run.cfg.path("application")
     for f in sorted(app_dir.glob("*.json")):
@@ -144,14 +234,17 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
         if ch:
             save_json(f, d)
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
-    note = f"run {run.id}" + (f"; reviewer effort {effort}" if effort else "")
+    carried = sum(1 for i in items + relations if i.get("carried_from"))
+    note = f"run {run.id}" + (f"; reviewer effort {effort}" if effort else "") \
+        + (f"; {carried} verdicts carried from an earlier review" if carried else "")
     entry = framing.approve(run.cfg, "review", p, by=by, at=now(), note=note, covers=covers)
-    return {**counts, "accepted_unconfirmed": unconfirmed, "mappings_removed": unbound, "gate": entry}
+    return {**counts, "accepted_unconfirmed": unconfirmed, "mappings_removed": unbound, "gate": entry,
+            "relations_rejected": len(gone_rel), "carried": carried}
 
 
 def require_review(cfg) -> tuple[bool, str]:
     """`release` of a shared level: the latest review gate must match its review.yaml and the shared-level
-    files as they were when the owner's verdicts were applied."""
+    files as they were when the verdicts were applied."""
     hits = [g for g in framing.gates(cfg) if g.get("gate") == "review"]
     if not hits:
         return False, "no review recorded (stage 8: `ontologizer review build`, then `review apply --by MODEL --effort E`)"

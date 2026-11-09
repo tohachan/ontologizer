@@ -46,8 +46,11 @@ class MappingError(ValueError):
 
 
 def _concept(c: dict) -> dict:
-    return {"label": c["label"], "alt_labels": c.get("alt_labels", []), "definition": c["definition"],
-            "category": c.get("upper_category")}
+    out = {"label": c["label"], "alt_labels": c.get("alt_labels", []), "definition": c["definition"],
+           "category": c.get("upper_category")}
+    if c.get("broader"):   # a SubKind or a Phase is judged wrong without the concept it specializes
+        out["broader"] = c["broader"]
+    return out
 
 
 def analyse(run: Run, project: str, engine=None) -> dict:
@@ -138,8 +141,8 @@ def analyse(run: Run, project: str, engine=None) -> dict:
 ANSWER_HELP = (
     "Write <project>.answers.json as {\"model\": \"<model id>\", \"mappings\": {\"<concept id>\": "
     "[{\"target\": \"domain:<id>\" | \"task:<id>\", \"kind\": \"equivalence|specialization|roleOf|realization|partial\", "
-    "\"confidence\": \"high|medium|low\", \"reason\": \"...\"}] or [] for none, with \"none_reason\" in "
-    "\"none\": {\"<concept id>\": \"...\"}}, \"categories\": {\"<concept id>\": {\"upper_category\": \"...\", "
+    "\"confidence\": \"high|medium|low\", \"reason\": \"...\"}] or [] for none}, "
+    "\"none\": {\"<concept id>\": \"why it has no target\"}, \"categories\": {\"<concept id>\": {\"upper_category\": \"...\", "
     "\"reason\": \"...\"}}}. Every concept needs an entry in mappings. `categories` is required for every id in "
     "category_disagreement.ids (keep or change the category, with the reason). The candidates are suggestions: "
     "any shared concept may be chosen. `partial` is the last resort, not the default: use it only when the concepts "

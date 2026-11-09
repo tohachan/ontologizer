@@ -100,7 +100,8 @@ def cmd_frame(args) -> int:
         print(f"frame: {p} from the template; the research agent fills it (skill frame-study)")
         return 0
     presets = sorted(x.stem for x in (cfg.kit_root / "presets").glob("*.yaml"))
-    errs = check(p.read_text(), presets) if p.is_file() else [f"no frame at {p}"]
+    overlay = (cfg.data.get("process") or {}).get("overlay")   # an overlay target reads the frame of a study
+    errs = check(p.read_text(), presets, project=None if overlay else cfg.project) if p.is_file() else [f"no frame at {p}"]
     if errs:
         print("frame:\n- " + "\n- ".join(errs), file=sys.stderr)
         return 2
@@ -342,6 +343,27 @@ def cmd_release_compare(args) -> int:
     return 0
 
 
+@_errors
+def cmd_update_check(args) -> int:
+    from ontologizer.core import update_check as uc
+    run = _run(args)
+    engine = _engine(run.cfg)
+    if engine is None:
+        print("update-check reads the release from the store; no store answers", file=sys.stderr)
+        return 2
+    try:
+        d = uc.check(run, _frame(run.cfg), engine, args.base, args.base_run)
+    except uc.UpdateCheckError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    print(f"update-check @{args.base}: {d['kept']} kept, {len(d['changed'])} changed, {len(d['moved'])} moved, "
+          f"{len(d['added'])} added, {len(d['removed'])} removed; {len(d['blocking'])} blocking → "
+          f"{run.path('update-check.md')}")
+    for x in d["blocking"]:
+        print(f"- {x}")
+    return 3 if d["blocking"] else 0
+
+
 # ---- stage 9 ---------------------------------------------------------------------
 @_errors
 def cmd_overlay(args) -> int:
@@ -379,8 +401,10 @@ def cmd_review(args) -> int:
         print(why, file=sys.stderr)
         return 2
     if args.action == "build":
-        d = review.build(run, _frame(run.cfg))
-        print(f"review: {d['items']} shared concepts in {d['path']}; the owner sets each verdict")
+        d = review.build(run, _frame(run.cfg), since=args.since)
+        print(f"review: {d['items']} shared concepts, {d['relations']} relations in {d['path']}; {d['open']} need a "
+              f"verdict ({d['kept']} kept, {d['carried']} carried from {args.since or 'no earlier run'}); "
+              f"a strong agent gives them")
         return 0
     if not args.by:
         print("review apply needs --by NAME (the reviewing agent's model, e.g. claude-opus-5-5, or a person)",
@@ -388,7 +412,8 @@ def cmd_review(args) -> int:
         return 2
     d = review.apply(run, args.by, effort=args.effort)
     print(f"review: {d['accept']} accepted ({d['accept'] - d.get('accepted_unconfirmed', 0)} asserted, {d.get('accepted_unconfirmed', 0)} unconfirmed stay hypotheses), {d['reject']} rejected, {d['revise']} to revise; "
-          f"{d['mappings_removed']} project mappings removed; gate recorded")
+          f"{d['mappings_removed']} project mappings removed, {d['relations_rejected']} relations rejected, "
+          f"{d['carried']} verdicts carried; gate recorded")
     return 0
 
 
@@ -432,12 +457,15 @@ def register(sub) -> None:
     add("stability", cmd_stability)
     s = add("report", cmd_report); s.add_argument("--compare", nargs=2, metavar=("A", "B"))
     s = add("release-compare", cmd_release_compare); s.add_argument("a", help="earlier version, e.g. 0.1")
-    s.add_argument("b", help="later version, built by --run"); s.add_argument("--run-a", default=None,
+    s.add_argument("b", help="later version built by --run, or `working` for the unreleased shared levels"); s.add_argument("--run-a", default=None,
                                                                               help="the run that built A, if any")
+    s = add("update-check", cmd_update_check); s.add_argument("base", help="the release to hold the update to, e.g. 0.1")
+    s.add_argument("--base-run", required=True, help="the run that built it, for its competency questions")
     s = add("overlay", cmd_overlay); s.add_argument("--previous", help="earlier application file of the target")
     s.add_argument("--compare", help="release-compare JSON from the earlier release to this one")
     s = add("review", cmd_review); s.add_argument("action", choices=["build", "apply"]); s.add_argument("--by")
     s.add_argument("--effort", help="the reviewing agent's reasoning effort, e.g. high")
+    s.add_argument("--since", help="build: an earlier run whose accepted verdicts stand for what has not changed")
     s = add("gold", cmd_gold); s.add_argument("action", choices=["sample", "calibrate"])
     s.add_argument("target", nargs="+", help="sample: gold set name; calibrate: the labelled gold file(s)")
     s.add_argument("--size", type=int, default=None); s.add_argument("--seed", type=int, default=0)

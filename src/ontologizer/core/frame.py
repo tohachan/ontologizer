@@ -47,7 +47,8 @@ def parse(text: str) -> tuple[dict, str]:
     return yaml.safe_load(m.group(1)) or {}, m.group(2)
 
 
-def check(text: str, preset_names: list[str] | None = None) -> list[str]:
+def check(text: str, preset_names: list[str] | None = None, project: str | None = None) -> list[str]:
+    """`project`: the owner's name, which the frame's `study` must repeat (not for an overlay target)."""
     try:
         h, body = parse(text)
     except (FrameError, yaml.YAMLError) as e:
@@ -55,6 +56,9 @@ def check(text: str, preset_names: list[str] | None = None) -> list[str]:
     errs: list[str] = []
     if not h.get("study"):
         errs.append("study: required")
+    elif project and h["study"] != project:
+        errs.append(f"study: {h['study']!r} is not the config's project {project!r}; one name, since IRIs and "
+                    f"graphs follow the config")
     if not h.get("preset"):
         errs.append("preset: required")
     elif preset_names is not None and h["preset"] not in preset_names:
@@ -94,6 +98,14 @@ def check(text: str, preset_names: list[str] | None = None) -> list[str]:
             errs.append(f"sources.{name}: not a project of any family")
         if (conf or {}).get("kind", "implementation") not in SOURCE_KINDS:
             errs.append(f"sources.{name}.kind: one of {SOURCE_KINDS}")
+        if (conf or {}).get("kind") == "description" and not (conf or {}).get("origin"):
+            errs.append(f"sources.{name}.origin: required for a description")
+        parent = (conf or {}).get("derived_from")
+        if parent and parent not in seen:
+            errs.append(f"sources.{name}.derived_from: {parent!r} is not a project of any family")
+        elif parent and name in seen and seen[parent] != seen[name]:
+            errs.append(f"sources.{name}: derived from {parent}, so it belongs to its family {seen[parent]}, "
+                        f"not {seen[name]}: a retelling is not independent")
     for p in h.get("overlay") or []:
         if p in seen:
             errs.append(f"overlay {p}: also in the corpus (family {seen[p]}); the overlay target is never read "

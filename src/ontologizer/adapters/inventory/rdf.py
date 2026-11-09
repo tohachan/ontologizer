@@ -15,12 +15,12 @@ of a line, and `weight` is the number of statements about it.
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 from rdflib import OWL, RDF, RDFS, Graph, URIRef
 from rdflib.namespace import SKOS
 
+from ontologizer.ports.evidence import git_version
 from ontologizer.ports.inventory import Candidate
 
 KIT_KEYS = {"max_candidates"}   # read by the kit's inventory stage, not by the adapter
@@ -41,11 +41,7 @@ class Rdf:
         return p is not None and p.is_file()
 
     def version(self, repo: str) -> str | None:
-        try:
-            return subprocess.run(["git", "-C", str(self.root / repo), "rev-parse", "HEAD"],
-                                  capture_output=True, text=True, check=True).stdout.strip()
-        except (OSError, subprocess.CalledProcessError):
-            return None
+        return git_version(self.root / repo)
 
     def freshness(self, repo: str) -> dict:
         return {"stale": False, "reason": "read directly from the source"}

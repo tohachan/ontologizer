@@ -19,12 +19,13 @@ from pathlib import Path
 
 import yaml
 
-from ontologizer.core.frame import Frame
+from ontologizer.core.frame import Frame, FrameError
 from ontologizer.core.run import Run, load_json, now, save_json
 from ontologizer.core.shared import application_docs, shared_concepts
 from ontologizer.core.verify import final_items
 
 DEFAULT_MIN_FAMILIES = 2
+CQ_STATUSES = ("answered", "partial", "unanswered")
 
 
 def min_families(run: Run) -> int:
@@ -67,11 +68,27 @@ def stability(run: Run, frame: Frame) -> dict:
     return doc
 
 
+def _check_cq(manual: dict, frame: Frame, path) -> None:
+    """A malformed answer file must not read as questions nobody answered. A plain value is metadata."""
+    ids = {q["id"] for q in frame.questions}
+    errs = []
+    for k, v in manual.items():
+        if not isinstance(v, dict):
+            continue
+        if k not in ids:
+            errs.append(f"{k}: not a question of the frame ({sorted(ids)}); ids are top-level keys")
+        elif v.get("status") not in CQ_STATUSES:
+            errs.append(f"{k}.status: one of {CQ_STATUSES}")
+    if errs:
+        raise FrameError([f"{path}: {e}" for e in errs])
+
+
 def _cq_status(run: Run, frame: Frame, engine=None) -> list[dict]:
     manual = {}
     p = run.path("cq.yaml")
     if p.is_file():
         manual = yaml.safe_load(p.read_text()) or {}
+        _check_cq(manual, frame, p)
     engine_cq = _engine_cq(run, frame, engine)
     out = []
     for q in frame.questions:
@@ -180,6 +197,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
     policies: dict[str, int] = {}
     recheck_types: dict[str, dict] = {}
     ev_checked = ev_sup = ev_final = 0
+    ev_kinds: dict[str, list[int]] = {}
     cov_num = cov_den = 0
     unmeasured = []
     for p in projects:
@@ -227,7 +245,11 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
             if v["evidence"]["share"] is not None:
                 ev_checked += v["evidence"]["checked"]
                 ev_sup += v["evidence"]["supported"]
-                ev_final += sum(1 for i in final_items(run, p, v) if i["final"] == "supported")
+                done = sum(1 for i in final_items(run, p, v) if i["final"] == "supported")
+                ev_final += done
+                by_kind = ev_kinds.setdefault(frame.source_kind(p), [0, 0])
+                by_kind[0] += done
+                by_kind[1] += v["evidence"]["checked"]
             for t, x in ((v.get("applied") or {}).get("recheck_by_type") or {}).items():
                 acc = recheck_types.setdefault(t, {"rechecked": 0, "changed": 0})
                 acc["rechecked"] += x["rechecked"]
@@ -260,6 +282,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
                        "rate": round(tgt_dis / tgt_cmp, 3) if tgt_cmp else None}},
         "verified_evidence_share": round(ev_sup / ev_checked, 3) if ev_checked else None,
         "verified_evidence_share_after_recheck": round(ev_final / ev_checked, 3) if ev_checked else None,
+        "verified_evidence_by_source_kind": {k: round(a / b, 3) for k, (a, b) in sorted(ev_kinds.items()) if b} or None,
         "recheck_change_rate": {t: round(x["changed"] / x["rechecked"], 3) for t, x in sorted(recheck_types.items())
                                 if x["rechecked"]} or None,
         "loo_stability": st["stable_share"],
@@ -305,6 +328,9 @@ def render(doc: dict) -> str:
              f"| Jev–LLM disagreement, mapping target | {_fmt(j['target']['rate'])} ({j['target']['disagree']}/{j['target']['compared']}) |",
              f"| Verified-evidence share, first judgement | {_fmt(m['verified_evidence_share'])} |",
              f"| Verified-evidence share, after the recheck | {_fmt(m.get('verified_evidence_share_after_recheck'))} |",
+             *([f"| Verified evidence, after the recheck, by kind of source | "
+                f"{', '.join(f'{k} {v:.3f}' for k, v in m['verified_evidence_by_source_kind'].items())} |"]
+               if len(m.get("verified_evidence_by_source_kind") or {}) > 1 else []),
              f"| Leave-one-out stability | {_fmt(m['loo_stability'])} |",
              f"| Competency-question coverage | {_fmt(m['cq_coverage'])} |",
              f"| Consistency clashes (engine reasoning) | {_fmt(m.get('consistency_clashes'))} |", ""]

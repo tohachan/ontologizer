@@ -31,10 +31,11 @@ import yaml
 from ontologizer.core.config import Config
 from ontologizer.core.levels import Preset
 from ontologizer.core.run import Run, load_json, now, save_json
-from ontologizer.core.shared import LEVELS, application_docs, graph_concepts
+from ontologizer.core.shared import LEVELS, application_docs, graph_concepts, shared_concepts
 from ontologizer.core.similarity import TfIdf, same_label
 from ontologizer.ports.decisions import Question
 
+WORKING = "working"   # as the later version: the unreleased shared levels, to compare before a release
 TOP_K = 3
 MIN_SIM = 0.12
 PAIR_BATCH = 20   # pairs per decision state: one adapter request each
@@ -303,7 +304,10 @@ def _run_metrics(run: Run | None) -> dict | None:
 
 
 def compare(cfg: Config, engine, a: str, b: str, run: Run, run_a: Run | None = None, frame=None) -> dict:
-    ca, cb = release_concepts(cfg, engine, a), release_concepts(cfg, engine, b)
+    ca = release_concepts(cfg, engine, a)
+    working = b == WORKING
+    cb = {s["ref"]: {**s, "evidence_count": len(s.get("evidence", []))} for s in shared_concepts(cfg)} if working \
+        else release_concepts(cfg, engine, b)
     if not ca or not cb:
         raise ValueError(f"no concepts in the shared graphs at @{a if not ca else b}: is it released?")
     pairs = candidate_pairs(ca, cb)
@@ -344,7 +348,7 @@ def compare(cfg: Config, engine, a: str, b: str, run: Run, run_a: Run | None = N
             "a_kept": sum(1 for c in corr if c["kind"] not in ("dropped", "added") for _ in c["a"]),
             "b_kept": sum(1 for c in corr if c["kind"] not in ("dropped", "added") for _ in c["b"]),
             "metrics": {"a": {**release_metrics(ca), **project_metrics(cfg, engine, a, frame, set(ca))},
-                        "b": {**release_metrics(cb), **project_metrics(cfg, engine, b, frame, set(cb))}},
+                        "b": {**release_metrics(cb), **({} if working else project_metrics(cfg, engine, b, frame, set(cb)))}},
             "run_metrics": {"a": _run_metrics(run_a), "b": _run_metrics(run)},
             "decisions": {"logged": len(dec), "cost_usd": round(cost, 4)},
             "correspondence": corr, "judged": judged, "trace_judged": trace}
