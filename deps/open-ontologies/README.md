@@ -14,7 +14,7 @@ make oo-server    # start the server unless one already answers at OO_URL
 3. **Writes a token** if `.env` has none. The token is 32 random bytes in hex, written to `OPEN_ONTOLOGIES_TOKEN` in the `.env` that `scripts/oo` reads, with mode `0600`.
 4. **Builds and starts the container** with `docker compose build` and `up -d --wait`. Then it checks that the token is accepted.
 
-`make oo-rebuild` builds the image again and recreates the container, for example after you update the clone. `make oo-down` stops the server. Neither one deletes the data volume.
+`make oo-rebuild` builds the image again and recreates the container, for example after you update the clone. `make oo-down` stops the server. Neither one deletes the data volume. Both refuse when the server answers but this Docker daemon has no engine container: the server then runs elsewhere (a VM has its own daemon and only forwards the port), and a rebuild here would start a second engine with an empty store.
 
 ## Configuration
 

@@ -132,6 +132,16 @@ build_and_start() {
   esac
 }
 
+# A server that answers without a container on this Docker daemon runs elsewhere (a VM has its own
+# daemon and only forwards the port). Recreating the container here would start a second engine with
+# an empty store instead of touching the real one.
+ensure_container_here() {
+  need_docker
+  if healthy && [ -z "$(compose ps -a -q engine 2>/dev/null)" ]; then
+    die "the server at $OO_URL has no container on this Docker daemon; run this where the server runs"
+  fi
+}
+
 # --- commands ----------------------------------------------------------------
 cmd_status() {
   echo "config:    defaults.conf${local_conf:+ + ${local_conf#$main/}}"
@@ -151,7 +161,15 @@ cmd_status() {
     echo "server:    $OO_URL not answering"
   fi
   if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
-    echo "container: $(compose ps -a --format '{{.Name}} {{.Status}}' engine 2>/dev/null | head -n1 | sed 's/^$/none/')"
+    local c
+    c=$(compose ps -a --format '{{.Name}} {{.Status}}' engine 2>/dev/null | head -n1)
+    if [ -n "$c" ]; then
+      echo "container: $c"
+    elif healthy; then
+      echo "container: none on this Docker daemon; the server above runs elsewhere (AGENTS.md, Open Ontologies)"
+    else
+      echo "container: none"
+    fi
   else
     echo "container: docker not available"
   fi
@@ -173,6 +191,7 @@ cmd_up() {
 
 cmd_rebuild() {
   ensure_local_url
+  ensure_container_here
   ensure_clone
   ensure_token
   say "the container will be recreated; the data volume is kept"
@@ -185,7 +204,7 @@ case "$cmd" in
   up)      cmd_up ;;
   clone)   ensure_clone ;;
   rebuild) cmd_rebuild ;;
-  down)    need_docker; compose down ;;
+  down)    ensure_container_here; compose down ;;
   logs)    need_docker; compose logs --tail=200 "$@" engine ;;
   *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; [ -z "$cmd" ] || exit 2 ;;
 esac

@@ -15,6 +15,16 @@ Local server: `make oo-status` shows whether the engine clone exists and the ser
 
 REST gotcha: `/api/query` and `/api/update` take SPARQL in the `query` field.
 
+**In a worktree or a VM.** Nothing needs setting up: `scripts/oo` and `uv run ontologizer …` work as they do in the main checkout, and `.env` and relative config paths fall back to it.
+
+- One server, one store. A worktree has no store of its own, so its writes reach everyone.
+- The `server:` line of `make oo-status` decides whether the engine is available, not `docker ps`. A session may run in a VM with its own Docker daemon, while the engine's container lives on the host and only its port is forwarded. `container: none on this Docker daemon` is then the normal state.
+- With the server elsewhere, start or rebuild nothing here. `make oo-rebuild` and `make oo-down` refuse. `make oo-server` does nothing while the server answers. If the server does not answer, report that to the owner instead of running it: it would create a second engine with an empty store.
+- A container started on that VM's daemon reaches the server at `http://host.docker.internal:8080`. `127.0.0.1` inside a container is the container itself, and the host-gateway address is the VM, not the host.
+- Inside a container set the store address through `store.url` in `ontologizer.local.yaml`: it beats `OPEN_ONTOLOGIES_URL`.
+
+**Review gate.** It is the `codex-review` command of the `codex-gates` plugin. A session that sees only the `codex-gated-development` skill does not have it: a command is not a skill, and a directory of skill links does not install a plugin. Check with the `agents-developer` preflight; if it reports `STOP`, install the plugin with `claude plugin marketplace add <source>` and `claude plugin install codex-gates@codex-gates-local`. The gate depends on the session's environment, not on the worktree.
+
 ## ontologizer kit
 
 This repository is the tool only. It must not reference any particular study or project: not in code, config, tests or docs. The one external dependency is Open Ontologies. The repository holds:
