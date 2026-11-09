@@ -1169,3 +1169,127 @@ def test_release_compare_takes_the_working_levels(study, tmp_path):
     run = _run(study)
     c = rc.compare(cfg, r.engine, "0.1", rc.WORKING, run, frame=fr)
     assert c["b"] == "working" and c["counts"].get("added") == 1 and c["metrics"]["b"]["concepts"] == 4
+
+
+def _with_reading(cfg, cid, target, kind="partial", status=None, differs=None):
+    f = next(p for p in cfg.path("application").glob("*.json") if any(c["id"] == cid for c in json.loads(p.read_text())["concepts"]))
+    d = json.loads(f.read_text())
+    for c in d["concepts"]:
+        if c["id"] == cid:
+            c["maps_to"] = [{"target": target, "kind": kind, "confidence": "medium", "differs": differs}]
+            if status:
+                c["status"] = status
+                c["evidence"] = c["evidence"] * 2
+    f.write_text(json.dumps(d))
+
+
+def _concept_of(seeds, ref):
+    lv, cid = ref.split(":")
+    return next(c for c in _level(seeds, lv)["concepts"] if c["id"] == cid)
+
+
+def _reviewable_two(study, tmp_path):
+    """A shared concept with two project concepts behind it."""
+    cfg, fr, seeds, decide, new, run, review = _reviewable(study, tmp_path)
+    assert decide("second", {"new_domain": [new("session", support=["alpha:session", "alpha:gate"])]}) == 0
+    return cfg, fr, seeds, decide, new, run, review
+
+
+def _refreshed(run, fr, review):
+    run.path("review.yaml").unlink()
+    review.build(run, fr)
+    _verdicts(run)
+
+
+def test_partial_mapping_makes_a_shared_concept_disputed_with_both_readings(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable_two(study, tmp_path)
+    support = _concept_of(seeds, "domain:session")["evidence"]
+    assert len(support) >= 2
+    first = support[0]["path"].split("/")[1].split("#")[1]
+    _with_reading(cfg, first, "domain:session", differs="narrower")
+    _refreshed(run, fr, review)
+    rv = yaml.safe_load(run.path("review.yaml").read_text())
+    item = next(i for i in rv["items"] if i["ref"] == "domain:session")
+    assert item["readings"]["open"][0]["why"] == ["partial"]
+    d = review.apply(run, "m")
+    c = _concept_of(seeds, "domain:session")
+    assert d["disputed"] == 1 and c["status"] == "disputed"
+    assert "narrower" in c["note"] and len({e["path"] for e in c["evidence"]}) >= 2
+
+
+def test_a_settled_reading_leaves_the_status_and_an_earlier_dispute_goes(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable_two(study, tmp_path)
+    ref = _concept_of(seeds, "domain:session")["evidence"][0]["path"].split("/")[1]
+    project, cid = ref.split("#")
+    _with_reading(cfg, cid, "domain:session")
+    _refreshed(run, fr, review)
+    review.apply(run, "m")
+    assert _concept_of(seeds, "domain:session")["status"] == "disputed"
+    assert decide("b", {"settled": [{"concept": f"{project}:{cid}", "target": "domain:session", "reason": "same idea"}]}) == 0
+    run.path("review.yaml").unlink()
+    review.build(run, fr)
+    rv = yaml.safe_load(run.path("review.yaml").read_text())
+    assert next(i for i in rv["items"] if i["ref"] == "domain:session")["readings"]["settled"][0]["reason"] == "same idea"
+    _verdicts(run)
+    assert review.apply(run, "m")["disputed"] == 0
+    c = _concept_of(seeds, "domain:session")
+    assert c["status"] != "disputed" and "Disputed by" not in c.get("note", "") and "dispute" not in c
+
+
+def test_a_disputed_project_concept_is_an_open_reading(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable_two(study, tmp_path)
+    cid = _concept_of(seeds, "domain:session")["evidence"][0]["path"].split("#")[1]
+    _with_reading(cfg, cid, "domain:session", kind="specialization", status="disputed")
+    _refreshed(run, fr, review)
+    review.apply(run, "m")
+    c = _concept_of(seeds, "domain:session")
+    assert c["status"] == "disputed" and "contradiction" in c["note"]
+
+
+def test_a_dispute_can_be_declared_and_ended_by_decision(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable_two(study, tmp_path)
+    assert decide("b", {"disputed": [{"ref": "domain:session", "reason": "the sources disagree on its limit"}]}) == 0
+    _refreshed(run, fr, review)
+    review.apply(run, "m")
+    c = _concept_of(seeds, "domain:session")
+    assert c["status"] == "disputed" and "disagree on its limit" in c["note"]
+    assert decide("c", {"settled": [{"target": "domain:session", "reason": "resolved"}]}) == 0
+    _refreshed(run, fr, review)
+    review.apply(run, "m")
+    assert _concept_of(seeds, "domain:session")["status"] != "disputed"
+
+
+def test_a_decision_on_disputes_needs_a_reason_and_known_concepts(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable_two(study, tmp_path)
+    assert decide("b", {"disputed": [{"ref": "domain:session"}]}) == 1
+    assert decide("c", {"disputed": [{"ref": "domain:nothing", "reason": "x"}]}) == 1
+    assert decide("d", {"settled": [{"concept": "alpha:nothing", "target": "domain:session", "reason": "x"}]}) == 1
+    assert decide("e", {"settled": [{"target": "domain:session"}]}) == 1
+
+
+def test_update_check_lists_a_dispute_and_does_not_block(study, tmp_path):
+    uc, cfg, fr, seeds, decide, new, r, report_now = _update_setup(study, tmp_path)
+    cid = _concept_of(seeds, "domain:session")["evidence"][0]["path"].split("#")[1]
+    _with_reading(cfg, cid, "domain:session")
+    report_now()
+    d = uc.check(_run(study), fr, r.engine, "0.1", "r1")
+    assert d["blocking"] == [] and "domain:session" in d["disputes"]
+    assert "## Disputed" in _run(study).path("update-check.md").read_text()
+
+
+def test_a_dispute_with_one_side_is_named_not_dropped(study, tmp_path):
+    cfg, fr, seeds, decide, new, run, review = _reviewable(study, tmp_path)
+    _with_reading(cfg, "step", "domain:step")
+    _refreshed(run, fr, review)
+    d = review.apply(run, "m")
+    assert d["disputed"] == 0 and d["one_sided"] == ["domain:step"]
+    assert _concept_of(seeds, "domain:step")["status"] != "disputed"
+
+
+def test_a_disputed_concept_always_cites_two_sides(study, tmp_path):
+    from ontologizer.core.shared import carry_dispute
+    e = {"open": [], "settled": [], "declared": "they disagree", "supporters": ["a:x", "b:y"]}
+    c = {"id": "c", "note": "", "evidence": [{"path": "projects/a#x", "kind": "graph"}]}
+    assert carry_dispute(c, e) and {x["path"] for x in c["evidence"]} == {"projects/a#x", "projects/b#y"}
+    assert carry_dispute(c, e) and len(c["evidence"]) == 2 and c["note"].count("Disputed by") == 1
+    assert not carry_dispute(c, None) and "Disputed by" not in c["note"] and "dispute" not in c

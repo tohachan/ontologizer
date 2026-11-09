@@ -9,6 +9,9 @@ Nothing here needs a new source: it holds the working levels to what was already
 - a competency question answered in the base run may not lose its answer, and the frame may not lose it;
 - the report is current and the reasoner finds no new clash.
 
+Readings that hold a shared concept apart (`shared.disputes`) do not block: they are listed, and `review apply`
+marks the concept `disputed`.
+
 The result is `runs/<run>/update-check.{json,md}` and a recorded gate. With `process.update_check: true`,
 `release` of a level that has an earlier release requires that gate, with nothing blocking, over the
 files as they are.
@@ -25,7 +28,7 @@ from ontologizer.core import frame as framing
 from ontologizer.core.frame import Frame
 from ontologizer.core.release_compare import release_concepts
 from ontologizer.core.run import Run, load_json, now, save_json
-from ontologizer.core.shared import LEVELS, application_docs, shared_concepts, shared_files
+from ontologizer.core.shared import LEVELS, application_docs, disputes, shared_concepts, shared_files
 from ontologizer.core.sources import evidence_source
 from ontologizer.core.verify import UNKNOWN_COMMIT, read_at
 from ontologizer.ports.decisions import Question
@@ -189,10 +192,13 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
         if b is not None and b > (a or 0):
             blocking.append(f"the reasoner finds {b} clash(es), {a or 0} in the base run")
 
+    held = disputes(run.cfg, application_docs(run.cfg, [p for p in frame.projects if p not in frame.overlay]))
+    open_disputes = {r: {"open": e["open"], "declared": e["declared"]} for r, e in sorted(held.items())
+                     if r in working and (e["open"] or e["declared"])}
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
     doc = {"run": run.id, "at": now(), "base": base, "base_run": base_run, "mode": run.mode("verify"),
            "kept": len(kept), "changed": changed, "moved": moved, "added": added, "removed": removed,
-           "relations_gone": rel_gone, "evidence": ev, "questions_lost": cq_lost, "blocking": blocking}
+           "relations_gone": rel_gone, "evidence": ev, "questions_lost": cq_lost, "disputes": open_disputes, "blocking": blocking}
     save_json(run.path("update-check.json"), doc)
     run.path("update-check.md").write_text(render(doc))
     framing.record(run.cfg, {"gate": "update-check", "file": str(run.path("update-check.json").relative_to(run.cfg.root)),
@@ -217,6 +223,13 @@ def render(d: dict) -> str:
     if d["removed"]:
         lines += ["## Removed", ""] + [f"- `{x['ref']}` {x['label']}: {x['reason'] or 'no reason recorded'}"
                                        + (f" → {x['replaced_by']}" if x.get("replaced_by") else "") for x in d["removed"]] + [""]
+    if d.get("disputes"):
+        lines += ["## Disputed", "", "Not blocking. An open reading or a declared dispute makes the concept `disputed` "
+                  "at `review apply`, until a consolidation file settles it with a reason.", ""]
+        for r, e in d["disputes"].items():
+            why = [x["concept"] for x in e["open"]] + ([e["declared"]] if e["declared"] else [])
+            lines.append(f"- `{r}`: {'; '.join(why)}")
+        lines.append("")
     if d["added"]:
         lines += ["## Added", ""] + [f"- `{x}`" for x in d["added"]] + [""]
     return "\n".join(lines) + "\n"

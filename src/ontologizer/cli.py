@@ -116,6 +116,9 @@ def cmd_ingest(args) -> int:
         return 2
     except WriteRejected as e:
         print(str(e), file=sys.stderr)
+        if len(args.file) == 1:
+            print("If this file refers to something new in another file you are changing, such as the other shared "
+                  "level, pass them together: ontologizer ingest A.json B.json", file=sys.stderr)
         return 3
     for res in results:
         verb = "would change" if args.dry_run and res.changed else ("written" if res.changed else "unchanged")

@@ -293,6 +293,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
     doc = {"run": run.id, "at": now(), "study": frame.h.get("study"), "projects": projects,
            "descriptions": [p for p in projects if frame.source_kind(p) == "description"],
            "metrics": metrics, "per_project": per, "stability_marks": st["marks"], "shared": shared,
+           "disputed": sorted(s["ref"] for s in shared_concepts(run.cfg) if s.get("status") == "disputed"),
            "competency_questions": cqs, "targets": target_fit(frame, cqs, projects),
            "consistency": cons,
            "decisions": _decision_stats(run),
@@ -340,6 +341,9 @@ def render(doc: dict) -> str:
     if (doc.get("stability_marks") or {}).get("unconfirmed"):
         lines += [f"{doc['stability_marks']['unconfirmed']} shared concepts are unconfirmed: admitted without the "
                   "independent support that confirmation needs, so they stay hypotheses.", ""]
+    if doc.get("disputed"):
+        lines += [f"{len(doc['disputed'])} shared concepts are disputed: {', '.join(doc['disputed'])}. "
+                  "Their readings differ, and each is kept; the notes say how.", ""]
     if m["inventory_unmeasured"]:
         lines += [f"Coverage unmeasured for: {', '.join(m['inventory_unmeasured'])}.", ""]
     c = doc.get("consistency")

@@ -412,8 +412,10 @@ def cmd_review(args) -> int:
         return 2
     d = review.apply(run, args.by, effort=args.effort)
     print(f"review: {d['accept']} accepted ({d['accept'] - d.get('accepted_unconfirmed', 0)} asserted, {d.get('accepted_unconfirmed', 0)} unconfirmed stay hypotheses), {d['reject']} rejected, {d['revise']} to revise; "
-          f"{d['mappings_removed']} project mappings removed, {d['relations_rejected']} relations rejected, "
+          f"{d.get('disputed', 0)} disputed, {d['mappings_removed']} project mappings removed, {d['relations_rejected']} relations rejected, "
           f"{d['carried']} verdicts carried; gate recorded")
+    if d.get("one_sided"):
+        print(f"not marked disputed, only one project concept stands behind them: {', '.join(d['one_sided'])}")
     return 0
 
 

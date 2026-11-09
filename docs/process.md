@@ -122,7 +122,8 @@ A decision file adds to the decisions before it, so a later run lists only what 
 - a concept named again replaces its earlier form, and a concept decided on the other level moves there, with the mappings to it;
 - `removed: [{ref, reason, replaced_by}]` takes a concept out, with its relations and the mappings to it;
 - `relations` join the existing ones, on the level of their `from` end, so activities can be ordered (`precedes`) and either end may sit on the other level (`task:<id>` or `domain:<id>` when an id is on both). `remove_relations: [{relation: [from, type, to], reason}]` takes one out;
-- `support_kinds: {<ref>: <kind> | {kind, overlap, differs}}` says how a supporting concept relates when it is not simply a specialization. A concept taken out of `support` loses the mapping this step gave it. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target.
+- `support_kinds: {<ref>: <kind> | {kind, overlap, differs}}` says how a supporting concept relates when it is not simply a specialization. A concept taken out of `support` loses the mapping this step gave it. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target;
+- `settled` and `disputed` say what a partial mapping or a contradiction does to a shared concept (§10).
 
 ### 6. Verification
 
@@ -175,9 +176,13 @@ An ontology of a topic does not wait for a corpus. It starts from what exists an
 | `equivalence` | the shared concept gains an origin; a second family confirms it, and the next review can make it `asserted` |
 | `specialization` | a candidate for a narrower concept |
 | none | a candidate for a new concept in stage 5 |
-| `partial` or a contradiction | `disputed`; the earlier claim is not overwritten silently |
+| `partial` or a contradiction | `disputed` at the review, with both readings kept, unless a decision settles it |
 
 A new family means a new frame, so its approval is asked for again.
+
+**Disputes need no question.** The rule is applied by the kit. A project concept that maps onto a shared one as `partial`, or that is itself `disputed`, is an open reading, and at `review apply` it makes the shared concept `disputed` whatever the verdict; the concept cites both sides and its note names them, so the earlier claim is never overwritten silently. The model deciding consolidation weighs each one. Where the shared definition holds for both sides, or the difference stays at project level, it records `settled: [{concept, target, reason}]` and the concept keeps its status. A contradiction no mapping shows goes in as `disputed: [{ref, reason}]`, and a later `settled: [{target, reason}]` ends it. A disputed statement keeps two readings, so a concept with one project concept behind it stays as it is, and `review apply` names it. A new source can reopen a concept only by bringing a new reading. `review build` shows the readings, and `update-check` and the report list what is disputed; none of this blocks a release.
+
+**Writing the levels.** Levels that refer to each other, such as a task level with relations to new domain concepts and a domain level with phases on new activities, go in one call: `ontologizer ingest <domain> <task> <project>…`. Each file is checked against the others as they will be, and nothing is written unless all pass.
 
 **The checks.** Before a release, `ontologizer update-check <base release> --base-run <the run that built it>` holds the working levels to the release. It needs no new source. It blocks on:
 - a concept removed, or a relation gone, with no recorded reason;

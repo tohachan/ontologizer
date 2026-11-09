@@ -11,7 +11,10 @@ Usage: ontologizer consolidate DECISIONS.yaml  (shared-level and application fil
 - rebinds project `candidate` mappings whose label was consolidated to the new IRI;
 - adds mappings for supporting/attached project concepts that lacked one, as `support_kinds:` says
   ({ref: kind or {kind, overlap, differs}}; by default specialization, on the task level realization),
-  and removes the ones this step added earlier for a concept no longer in the support.
+  and removes the ones this step added earlier for a concept no longer in the support;
+- `settled:` ({concept, target, reason}) records why a partial or disputed project concept need not make
+  its shared concept disputed, and `disputed:` ({ref, reason}) declares a dispute no mapping shows; a later
+  `settled:` ({target, reason}) ends one. `review apply` acts on them (`shared.disputes`).
 Idempotent: re-running on its own output changes nothing. Ingest afterwards.
 
 With a frame (docs/process.md §5) every new shared concept also needs a
@@ -82,6 +85,7 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
     errors = []
     label_to_target: dict[str, str] = {}
     errors += _check_removals(dec, shared)
+    errors += _check_disputes(dec, shared, concepts)
     moved = _moves(dec, shared)
     for level, key in (("domain", "new_domain"), ("task", "new_task")):
         doc = shared[level]
@@ -203,6 +207,26 @@ def _check_removals(dec: dict, shared: dict) -> list[str]:
     for x in dec.get("remove_relations") or []:
         if len(x.get("relation") or []) != 3 or not str(x.get("reason", "")).strip():
             errs.append(f"remove_relations {x.get('relation')}: [from, type, to] and `reason` required")
+    return errs
+
+
+def _check_disputes(dec: dict, shared: dict, concepts: dict) -> list[str]:
+    errs = []
+    decided = {f"{lv}:{n['id']}" for lv, key in (("domain", "new_domain"), ("task", "new_task"))
+               for n in dec.get(key, [])}
+    known = decided | {f"{lv}:{c['id']}" for lv, doc in shared.items() for c in doc["concepts"]}
+    for x in dec.get("disputed") or []:
+        if not str(x.get("reason", "")).strip():
+            errs.append(f"disputed {x.get('ref')}: `reason` required")
+        if x.get("ref") not in known:
+            errs.append(f"disputed {x.get('ref')}: not a shared concept")
+    for x in dec.get("settled") or []:
+        if not str(x.get("reason", "")).strip():
+            errs.append(f"settled {x.get('concept') or x.get('target')}: `reason` required")
+        if x.get("target") not in known:
+            errs.append(f"settled {x.get('target')}: not a shared concept")
+        if x.get("concept") and tuple(x["concept"].split(":")) not in concepts:
+            errs.append(f"settled {x['concept']}: unknown project concept")
     return errs
 
 

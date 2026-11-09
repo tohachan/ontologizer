@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 from ontologizer.core.config import Config
 
 LEVELS = ("domain", "task")
@@ -104,3 +106,79 @@ def application_docs(cfg: Config, projects: list[str] | None = None) -> dict[str
         if projects is None or d.get("project") in projects:
             out[d["project"]] = d
     return out
+
+
+def disputes(cfg: Config, docs: dict[str, dict]) -> dict[str, dict]:
+    """What keeps a shared concept from standing as one reading (docs/process.md §10), by its ref.
+
+    A project concept that maps onto it as `partial`, or that is itself `disputed`, is a reading of its own.
+    It stays open until a consolidation file settles it (`settled: [{concept, target, reason}]`), saying why
+    the shared concept need not carry the difference. A file can also declare a dispute no mapping shows
+    (`disputed: [{ref, reason}]`), which a later `settled: [{target, reason}]` ends.
+
+    `open` and `declared` make the concept disputed; `settled` is what was resolved, with the reasons;
+    `supporters` are all the project concepts behind it."""
+    settled: dict[tuple[str, str], str] = {}
+    declared: dict[str, str] = {}
+    for p in sorted((cfg.root / "consolidation").glob("*.yaml")):
+        dec = yaml.safe_load(p.read_text()) or {}
+        for x in dec.get("disputed") or []:
+            declared[x["ref"]] = x["reason"]
+        for x in dec.get("settled") or []:
+            if x.get("concept"):
+                settled[(x["concept"], x["target"])] = x["reason"]
+            else:
+                declared.pop(x["target"], None)
+    out: dict[str, dict] = {}
+
+    def entry(ref: str) -> dict:
+        return out.setdefault(ref, {"open": [], "settled": [], "declared": None, "supporters": []})
+
+    for project, d in docs.items():
+        for c in d.get("concepts", []):
+            for m in c.get("maps_to", []):
+                ref, name = m.get("target"), f"{project}:{c['id']}"
+                if not ref:
+                    continue
+                entry(ref)["supporters"].append(name)
+                why = ["partial"] if m.get("kind") == "partial" else []
+                why += ["contradiction"] if c.get("status") == "disputed" else []
+                if not why:
+                    continue
+                reading = {"concept": name, "why": why, "overlap": m.get("overlap"), "differs": m.get("differs")}
+                reason = settled.get((name, ref))
+                if reason:
+                    entry(ref)["settled"].append({**reading, "reason": reason})
+                else:
+                    entry(ref)["open"].append(reading)
+    for ref, reason in declared.items():
+        entry(ref)["declared"] = reason
+    return {r: e for r, e in out.items() if e["open"] or e["settled"] or e["declared"]}
+
+
+def carry_dispute(c: dict, e: dict | None) -> bool:
+    """Bring a shared concept in line with its readings. True when it is now disputed.
+
+    A disputed statement keeps both readings, so it cites at least two project concepts. With only one concept
+    behind it there is nothing to weigh it against, and it stays as it was."""
+    if c.get("dispute"):
+        c["note"] = c.get("note", "").replace(c.pop("dispute"), "").strip()
+    if not e or not (e["open"] or e["declared"]):
+        return False
+    def path(name: str) -> str:
+        return f"projects/{name.replace(':', '#', 1)}"
+
+    cited = {x["path"] for x in c.get("evidence", [])}
+    if len(cited | {path(n) for n in e["supporters"]}) < 2:
+        return False
+    add = list(dict.fromkeys(path(x["concept"]) for x in e["open"] if path(x["concept"]) not in cited))
+    rest = [p for p in dict.fromkeys(path(n) for n in e["supporters"]) if p not in cited and p not in add]
+    add += rest[:max(0, 2 - len(cited) - len(add))]
+    c.setdefault("evidence", []).extend({"path": p, "kind": "graph"} for p in add)
+    parts = [f"{x['concept']} ({' and '.join(x['why'])})" + (f": {x['differs']}" if x.get("differs") else "")
+             for x in e["open"]]
+    parts += [e["declared"]] if e["declared"] else []
+    c["dispute"] = "Disputed by " + "; ".join(parts) + "."
+    c["note"] = (c.get("note", "") + " " + c["dispute"]).strip()
+    c["status"] = "disputed"
+    return True

@@ -7,7 +7,8 @@
   what it judged is unchanged, so after an edit only the changes need one;
   `--since RUN` carries accepted verdicts over from an earlier run.
 - `review apply` makes accepted concepts `asserted`, removes rejected ones
-  (and the project mappings to them), notes revisions, and records the
+  (and the project mappings to them), notes revisions, marks as `disputed`
+  what an open reading or a declared dispute holds apart, and records the
   `review` gate; `release` of a shared level requires that gate.
 - `gold sample` draws a stratified sample of logged decisions (evidence
   claims, categories, same-concept pairs) for a strong agent to label, without
@@ -29,7 +30,7 @@ import yaml
 from ontologizer.core import frame as framing
 from ontologizer.core.frame import Frame
 from ontologizer.core.run import Run, load_json, now, save_json
-from ontologizer.core.shared import application_docs, shared_files
+from ontologizer.core.shared import application_docs, carry_dispute, disputes, shared_files
 
 VERDICTS = ("accept", "reject", "revise")
 GRID = [round(0.05 * i, 2) for i in range(1, 20)]
@@ -53,6 +54,7 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
     docs = application_docs(run.cfg, [p for p in frame.projects if p not in frame.overlay])
     from ontologizer.core.verify import final_items
     ver = {p: final_items(run, p) for p in docs}
+    held = disputes(run.cfg, docs)
     items = []
     for lv, f in shared_files(run.cfg).items():
         for c in json.loads(f.read_text()).get("concepts", []):
@@ -76,6 +78,9 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
                           "families": s.get("families", []), "stability": s.get("mark", "unknown"),
                           "breaks_without": s.get("breaks_without", []), "reason": (c.get("support") or {}).get("reason"),
                           "support": sup, "verdict": None, "comment": None})
+            if ref in held:
+                e = held[ref]
+                items[-1]["readings"] = {"open": e["open"], "settled": e["settled"], "declared": e["declared"]}
     for i in items:
         i["fingerprint"] = _fingerprint(i)
     relations = _relation_items(run, docs)
@@ -85,7 +90,10 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
                            "then record the gate with `ontologizer review apply --by <name>`. A shared concept whose "
                            "`category_differs` lists categories has a supporting project concept typed otherwise: "
                            "keep the shared category only for a reason you state. A relation with `counterpart: "
-                           "false` has no relation between the supporting project concepts, so check it in the source.",
+                           "false` has no relation between the supporting project concepts, so check it in the source. "
+                           "`readings` lists the partial or disputed concepts behind a shared one: an open reading "
+                           "or a declared dispute makes it `disputed` whatever the verdict, until a consolidation "
+                           "file settles it with a reason.",
            "items": items, "relations": relations}
     p = review_path(run)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -181,9 +189,12 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
     counts = {v: 0 for v in VERDICTS}
     from ontologizer.core.levels import Preset
     confirmation = Preset.load(run.cfg.preset_path).min_families
-    lowered = Frame.load(run.cfg).admission_families(confirmation) < confirmation
+    fr = Frame.load(run.cfg)
+    lowered = fr.admission_families(confirmation) < confirmation
     unconfirmed = 0
     rejected = set()
+    held = disputes(run.cfg, application_docs(run.cfg, [x for x in fr.projects if x not in fr.overlay]))
+    disputed, one_sided = 0, []
     for lv, f in shared_files(run.cfg).items():
         d = json.loads(f.read_text())
         keep = []
@@ -209,6 +220,13 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
             else:
                 c["status"] = "hypothesis"
                 c["note"] = (c.get("note", "") + f" Review ({by}, {run.id}): {i['comment']}").strip()
+            e = held.get(ref)
+            if carry_dispute(c, e):
+                disputed += 1
+                if i["verdict"] == "accept" and not (lowered and len(i.get("families") or []) < confirmation):
+                    unconfirmed += 1     # an accept that does not assert: it counts with those that stay hypotheses
+            elif e and (e["open"] or e["declared"]):
+                one_sided.append(ref)
             keep.append(c)
         d["concepts"] = keep
         save_json(f, d)
@@ -238,7 +256,7 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
     note = f"run {run.id}" + (f"; reviewer effort {effort}" if effort else "") \
         + (f"; {carried} verdicts carried from an earlier review" if carried else "")
     entry = framing.approve(run.cfg, "review", p, by=by, at=now(), note=note, covers=covers)
-    return {**counts, "accepted_unconfirmed": unconfirmed, "mappings_removed": unbound, "gate": entry,
+    return {**counts, "accepted_unconfirmed": unconfirmed, "disputed": disputed, "one_sided": one_sided, "mappings_removed": unbound, "gate": entry,
             "relations_rejected": len(gone_rel), "carried": carried}
 
 
