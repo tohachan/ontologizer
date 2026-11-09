@@ -387,7 +387,7 @@ def cmd_review(args) -> int:
               file=sys.stderr)
         return 2
     d = review.apply(run, args.by, effort=args.effort)
-    print(f"review: {d['accept']} accepted (asserted), {d['reject']} rejected, {d['revise']} to revise; "
+    print(f"review: {d['accept']} accepted ({d['accept'] - d.get('accepted_unconfirmed', 0)} asserted, {d.get('accepted_unconfirmed', 0)} unconfirmed stay hypotheses), {d['reject']} rejected, {d['revise']} to revise; "
           f"{d['mappings_removed']} project mappings removed; gate recorded")
     return 0
 

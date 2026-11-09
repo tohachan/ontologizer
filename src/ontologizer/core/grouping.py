@@ -78,7 +78,8 @@ def build(run: Run, frame: Frame) -> dict:
     comps: dict[str, list[str]] = {}
     for k in keys:
         comps.setdefault(find(k), []).append(k)
-    need = Preset.load(run.cfg.preset_path).min_families
+    confirmation = Preset.load(run.cfg.preset_path).min_families
+    need = frame.admission_families(confirmation)
     groups = []
     for n, mem in enumerate(sorted((sorted(v) for v in comps.values() if len(v) > 1), key=lambda v: (-len(v), v))):
         projects = sorted({con[m]["project"] for m in mem})
@@ -87,6 +88,7 @@ def build(run: Run, frame: Frame) -> dict:
                        "projects": projects, "families": fams, "eligible": len(fams) >= need})
     doc = {"run": run.id, "at": now(), "mode": dec.mode, "threshold": thr, "unmapped": len(keys),
            "pairs_judged": len(judged), "groups": groups,
+           "admission_families": need, "confirmation_families": confirmation,
            "singletons": sorted(k for v in comps.values() if len(v) == 1 for k in v),
            "concepts": {k: _brief(con[k]) for k in keys}, "judged": judged,
            "families": {f: v["projects"] for f, v in frame.families.items()}, "overlay_excluded": frame.overlay}

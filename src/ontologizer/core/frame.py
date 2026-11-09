@@ -27,6 +27,7 @@ HEADER = re.compile(r"\A---\n(.*?)\n---\n(.*)\Z", re.S)
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 CQ_LEVELS = ("domain", "task", "application", "variation", "top")
 FIT = ("full", "partial", "none")
+SOURCE_KINDS = ("implementation", "description")   # a system's own source, or a text that describes a subject
 
 
 class FrameError(ValueError):
@@ -68,8 +69,16 @@ def check(text: str, preset_names: list[str] | None = None) -> list[str]:
         if not r.get("name") or not r.get("use"):
             errs.append(f"reuse[{i}]: name and use required")
     fams = h.get("families") or {}
-    if len(fams) < 2:
-        errs.append("families: at least two architectural families (support needs two)")
+    admission = h.get("admission_families")
+    if admission is not None and (not isinstance(admission, int) or isinstance(admission, bool) or admission < 1):
+        errs.append("admission_families: a whole number of at least 1")
+        admission = None
+    if admission == 1:
+        if not fams:
+            errs.append("families: at least one (admission_families is 1)")
+    elif len(fams) < (admission or 2):
+        errs.append("families: at least two architectural families (support needs two)"
+                    if not admission or admission == 2 else f"families: at least {admission} (admission_families)")
     seen: dict[str, str] = {}
     for fid, f in fams.items():
         if not SLUG.match(str(fid)):
@@ -80,6 +89,11 @@ def check(text: str, preset_names: list[str] | None = None) -> list[str]:
             if p in seen:
                 errs.append(f"project {p}: in families {seen[p]} and {fid}; one family each")
             seen[p] = fid
+    for name, conf in (h.get("sources") or {}).items():
+        if name not in seen:
+            errs.append(f"sources.{name}: not a project of any family")
+        if (conf or {}).get("kind", "implementation") not in SOURCE_KINDS:
+            errs.append(f"sources.{name}.kind: one of {SOURCE_KINDS}")
     for p in h.get("overlay") or []:
         if p in seen:
             errs.append(f"overlay {p}: also in the corpus (family {seen[p]}); the overlay target is never read "
@@ -156,6 +170,14 @@ class Frame:
     @property
     def projects(self) -> list[str]:
         return [p for f in self.families.values() for p in f["projects"]]
+
+    def admission_families(self, confirmation: int) -> int:
+        """Families a concept needs to enter the shared levels. By default the confirmation threshold of the
+        preset; a frame may lower it (`admission_families`), and such a concept stays a hypothesis until confirmed."""
+        return min(int(self.h.get("admission_families") or confirmation), confirmation)
+
+    def source_kind(self, project: str) -> str:
+        return ((self.h.get("sources") or {}).get(project) or {}).get("kind", "implementation")
 
     def family_of(self, project: str) -> str | None:
         return next((fid for fid, f in self.families.items() if project in f["projects"]), None)

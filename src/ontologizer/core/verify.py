@@ -25,7 +25,7 @@ from ontologizer.core.run import Run, load_json, now, save_json
 from ontologizer.core.shared import application_file
 from ontologizer.core.sources import evidence_source
 from ontologizer.ports.decisions import Question
-from ontologizer.ports.evidence import read_lines
+from ontologizer.ports.evidence import read_lines, slice_lines
 
 PAD = 3
 LIMIT = 160
@@ -56,24 +56,8 @@ def read_at(root: Path | None, commit: str | None, path: str, lines: str | None)
                                   check=True).stdout.decode(errors="replace")
         except (OSError, subprocess.CalledProcessError):
             return None
-        return _slice(blob.splitlines(), lines)
+        return slice_lines(blob.splitlines(), lines, pad=PAD, limit=LIMIT)
     return read_lines(root, path, lines, pad=PAD, limit=LIMIT)
-
-
-def _slice(text: list[str], lines: str | None) -> str | None:
-    if lines:
-        a, _, b = str(lines).partition("-")
-        try:
-            lo, hi = int(a), int(b or a)
-        except ValueError:
-            return None
-        if lo < 1 or lo > len(text) or hi < lo:
-            return None
-        lo, hi = max(1, lo - PAD), min(len(text), hi + PAD)
-    else:
-        lo, hi = 1, min(len(text), LIMIT)
-    hi = min(hi, lo + LIMIT - 1)
-    return "\n".join(f"{n}: {text[n - 1]}" for n in range(lo, hi + 1))
 
 
 def claims(doc: dict) -> list[dict]:
@@ -207,6 +191,20 @@ def analyse(run: Run, project: str) -> dict:
     save_json(run.path("verify", f"{project}.json"), out)
     save_json(run.path("verify", f"{project}.recheck.json"),
               {"project": project, "run": run.id, "instructions": RECHECK_HELP, "items": rechecks})
+    return out
+
+
+def final_items(run: Run, project: str, v: dict | None = None) -> list[dict]:
+    """The evidence items with the verdict that counts: once the verification is applied, a recheck overrides
+    the first judgement. Each keeps its first verdict in `verdict` and gets `final`."""
+    v = v if v is not None else (load_json(run.path("verify", f"{project}.json"), {}) or {})
+    answers = {}
+    if v.get("applied"):
+        answers = (load_json(run.path("verify", f"{project}.recheck.answers.json"), {}) or {}).get("verdicts") or {}
+    out = []
+    for it in v.get("items", []):
+        r = answers.get(f"evidence:{it['claim']}#e{it['evidence']}") if it.get("evidence") is not None else None
+        out.append({**it, "final": r.get("value") if r and r.get("verdict") == "change" else it["verdict"]})
     return out
 
 

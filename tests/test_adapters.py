@@ -186,3 +186,29 @@ def test_large_add_and_remove_are_chunked():
     st.add_to_graph("urn:ontologizer:graph:a", _nt(400))
     st.remove_from_graph("urn:ontologizer:graph:a", _nt(400))
     assert len(st.sent) > 2 and all(len(s.encode()) <= 4_000 for s in st.sent)
+
+
+def test_rdf_inventory_lists_classes_and_concepts_with_lines(tmp_path):
+    src = tmp_path / "sources" / "acme"
+    src.mkdir(parents=True)
+    (src / "model.txt").write_text("""@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+@prefix a: <https://example.invalid/a#> .
+
+a:Thing
+    a owl:Class ;
+    rdfs:label "A thing" .
+
+a:Mode a skos:Concept ; skos:prefLabel "A mode"@en ; skos:definition "x" .
+
+a:rel a owl:ObjectProperty .
+a:one a a:Thing .
+""")
+    inv = plugins.load("inventory", {"adapter": "rdf", "root": "sources", "files": {"acme": "model.txt"},
+                                     "format": "turtle"}, base=tmp_path)
+    assert inv.available("acme") and not inv.available("other")
+    got = {c.id: c for c in inv.candidates("acme")}
+    assert set(got) == {"Thing", "Mode"}                  # no properties, no individuals
+    assert (got["Thing"].kind, got["Thing"].name, got["Thing"].lines) == ("type", "A thing", "6")
+    assert (got["Mode"].kind, got["Mode"].lines) == ("concept", "10")

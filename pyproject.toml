@@ -22,6 +22,7 @@ checkout = "ontologizer.adapters.evidence.checkout:factory"
 
 [project.entry-points."ontologizer.inventory"]
 graphify = "ontologizer.adapters.inventory.graphify:factory"
+rdf = "ontologizer.adapters.inventory.rdf:factory"
 
 [project.entry-points."ontologizer.decisions"]
 jev = "ontologizer.adapters.decisions.jev:factory"

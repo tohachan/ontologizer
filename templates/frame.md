@@ -17,6 +17,10 @@ families:                      # the comparison corpus by architectural family
   family-b:
     label: Second architectural family
     projects: [project-3]
+# admission_families: 1         # optional: families a concept needs to enter the shared levels (default: the
+                               # preset's confirmation threshold); below that threshold it stays a hypothesis
+# sources:                       # optional, per project: `description` for a text about a subject, not a system
+#   project-3: {kind: description, origin: where the text comes from}
 overlay: []                    # projects mapped onto a release later; never read while building shared levels
 competency_questions:
   - id: cq1

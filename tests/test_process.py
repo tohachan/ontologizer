@@ -696,3 +696,102 @@ def test_report_uses_engine_cq_runner_and_reasoner(study):
     cq1 = next(q for q in rep["competency_questions"] if q["id"] == "cq1")
     assert cq1["status"] == "answered" and cq1["how"] == "onto_cq_run" and cq1["pitfalls"] == ["P11"]
     assert rep["metrics"]["consistency_clashes"] == 1 and rep["consistency"]["subjects"] == ["<urn:ontologizer:projects/a:x>"]
+
+
+# ---- a topic that starts from one source ------------------------------------------------
+ONE_SOURCE = FRAME.replace("  fam-b: {label: Family B, projects: [beta, gamma]}\n", "") \
+    .replace("families:\n", "admission_families: 1\nsources:\n  alpha: {kind: description, origin: a note}\nfamilies:\n")
+
+
+def test_frame_admission_lowers_the_family_minimum():
+    assert check(ONE_SOURCE) == []
+    assert any("two architectural families" in e for e in check(ONE_SOURCE.replace("admission_families: 1\n", "")))
+    assert any("admission_families" in e for e in check(ONE_SOURCE.replace("admission_families: 1", "admission_families: 0")))
+    assert any("sources.other" in e for e in check(ONE_SOURCE.replace("  alpha: {kind", "  other: {kind")))
+    assert any("kind" in e for e in check(ONE_SOURCE.replace("kind: description", "kind: rumour")))
+
+
+def test_description_source_gets_its_own_brief(study):
+    from ontologizer.core.brief import render
+    (study / "frame.md").write_text(ONE_SOURCE)
+    _approve(study)
+    run = _run(study)
+    text = render(run, Frame.load(run.cfg), "alpha", "opus")
+    assert "what its author claims" in text and "types in code" not in text and "No `maps_to`" in text
+    assert "`caveats`" in text and "extract/alpha/opus.json" in text
+
+
+def test_one_source_is_admitted_but_stays_a_hypothesis(study, tmp_path):
+    from ontologizer.core import report, review
+    from ontologizer.core.consolidation import apply as consolidate
+    from ontologizer.core.shared import shared_file
+    (study / "frame.md").write_text(ONE_SOURCE)
+    _approve(study)
+    cfg, fr = _cfg(study), Frame.load(_cfg(study))
+    assert fr.admission_families(2) == 1
+    assert Frame.load(cfg).source_kind("alpha") == "description"
+    app = _extraction("alpha", "opus", [_concept("session", "Session")])
+    app["concepts"][0]["maps_to"] = []
+    save_json(cfg.path("application") / "alpha.json", app)
+    seeds = {lv: shared_file(cfg, lv) for lv in ("domain", "task")}
+    (study / "consolidation").mkdir()
+    (study / "consolidation" / "r1.yaml").write_text(yaml.safe_dump({"model": "claude-opus-5-5", "new_domain": [
+        {"id": "session", "label": "Session", "cat": "Kind", "def": "An agent session.", "reason": "the source defines it",
+         "support": ["alpha:session"]}]}))
+    decisions = study / "consolidation" / "r1.yaml"
+    assert consolidate(decisions, seeds, cfg.path("application"), frame=fr) == 1          # the default: two families
+    assert consolidate(decisions, seeds, cfg.path("application"), frame=fr, min_families=1) == 0
+    run = _run(study)
+    st = report.stability(run, fr)
+    assert st["concepts"]["domain:session"]["mark"] == "unconfirmed" and st["stable_share"] == 0
+    review.build(run, fr)
+    rv = yaml.safe_load(run.path("review.yaml").read_text())
+    rv["items"][0]["verdict"] = "accept"
+    run.path("review.yaml").write_text(yaml.safe_dump(rv))
+    out = review.apply(run, "reviewer")
+    assert out["accept"] == 1 and out["accepted_unconfirmed"] == 1
+    assert json.loads(seeds["domain"].read_text())["concepts"][0]["status"] == "hypothesis"
+
+
+def test_two_families_confirm_under_a_lowered_admission(study):
+    from ontologizer.core import report, review
+    from ontologizer.core.shared import shared_file
+    (study / "frame.md").write_text(FRAME.replace("families:\n", "admission_families: 1\nfamilies:\n", 1))
+    _approve(study)
+    cfg, fr = _cfg(study), Frame.load(_cfg(study))
+    for p in ("alpha", "beta"):
+        d = _extraction(p, "opus", [_concept("session", "Session")])
+        d["concepts"][0]["maps_to"] = [{"target": "domain:session", "kind": "equivalence"}]
+        save_json(cfg.path("application") / f"{p}.json", d)
+    save_json(shared_file(cfg, "domain"), {"graph": "shared/domain", "concepts": [
+        {"id": "session", "label": "Session", "level": "domain", "upper_category": "Kind", "definition": "x"}]})
+    run = _run(study)
+    assert report.stability(run, fr)["concepts"]["domain:session"]["mark"] == "fragile"
+    review.build(run, fr)
+    rv = yaml.safe_load(run.path("review.yaml").read_text())
+    rv["items"][0]["verdict"] = "accept"
+    run.path("review.yaml").write_text(yaml.safe_dump(rv))
+    assert review.apply(run, "reviewer")["accepted_unconfirmed"] == 0
+    assert json.loads(shared_file(cfg, "domain").read_text())["concepts"][0]["status"] == "asserted"
+
+
+def test_a_citation_may_name_several_line_ranges(tmp_path):
+    from ontologizer.core.verify import read_at
+    sha = _git_repo(tmp_path / "r", {"a.txt": "".join(f"line {i}\n" for i in range(1, 31))})
+    two = read_at(tmp_path / "r", sha, "a.txt", "2-3, 20")     # each range gets the reader's padding
+    assert "line 2\n" in two and "line 20\n" in two and "line 12\n" not in two
+    assert read_at(tmp_path / "r", sha, "a.txt", "2,99") is None and read_at(tmp_path / "r", sha, "a.txt", "x") is None
+
+
+def test_recheck_verdicts_reach_the_final_items(study):
+    from ontologizer.core.verify import final_items
+    run = _run(study)
+    v = {"items": [{"claim": "concept:a", "evidence": 0, "verdict": "unsupported"},
+                   {"claim": "concept:a", "evidence": 1, "verdict": "supported"},
+                   {"claim": "concept:b", "evidence": None, "verdict": "no-evidence"}]}
+    save_json(run.path("verify", "alpha.recheck.answers.json"), {"verdicts": {
+        "evidence:concept:a#e0": {"verdict": "change", "value": "supported", "reason": "x"},
+        "evidence:concept:a#e1": {"verdict": "confirm", "reason": "x"}}})
+    assert [i["final"] for i in final_items(run, "alpha", v)] == ["unsupported", "supported", "no-evidence"]   # not applied
+    v["applied"] = {"at": "t"}
+    assert [i["final"] for i in final_items(run, "alpha", v)] == ["supported", "supported", "no-evidence"]

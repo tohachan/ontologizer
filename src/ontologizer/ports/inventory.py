@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
-KINDS = ("type", "enum", "table", "interface", "cli", "api", "module")
+KINDS = ("type", "enum", "table", "interface", "cli", "api", "module", "concept")
 
 
 @dataclass(frozen=True)

@@ -211,9 +211,11 @@ def cmd_consolidate(args) -> int:
     from ontologizer.core.consolidation import apply
     cfg = Config.load(args.config)
     from ontologizer.core.shared import shared_file
+    frame = _frame_or_none(cfg)
+    confirmation = Preset.load(cfg.preset_path).min_families
     return apply(args.decisions, {lv: shared_file(cfg, lv) for lv in ("domain", "task")},
-                 cfg.path("application"), frame=_frame_or_none(cfg),
-                 min_families=Preset.load(cfg.preset_path).min_families)
+                 cfg.path("application"), frame=frame,
+                 min_families=frame.admission_families(confirmation) if frame else confirmation)
 
 
 def _frame_or_none(cfg: Config):

@@ -46,7 +46,8 @@ def review_path(run: Run) -> Path:
 def build(run: Run, frame: Frame) -> dict:
     st = load_json(run.path("stability.json"), {}) or {}
     docs = application_docs(run.cfg, [p for p in frame.projects if p not in frame.overlay])
-    ver = {p: load_json(run.path("verify", f"{p}.json"), {}) or {} for p in docs}
+    from ontologizer.core.verify import final_items
+    ver = {p: final_items(run, p) for p in docs}
     items = []
     for lv, f in shared_files(run.cfg).items():
         for c in json.loads(f.read_text()).get("concepts", []):
@@ -55,9 +56,9 @@ def build(run: Run, frame: Frame) -> dict:
             for p, d in docs.items():
                 for pc in d["concepts"]:
                     if any(m.get("target") == ref for m in pc.get("maps_to", [])):
-                        vi = [i for i in ver[p].get("items", []) if i["claim"] == f"concept:{pc['id']}"
-                              and i["verdict"] in ("supported", "unsupported", "missing")]
-                        ok = sum(1 for i in vi if i["verdict"] == "supported")
+                        vi = [i for i in ver[p] if i["claim"] == f"concept:{pc['id']}"
+                              and i["final"] in ("supported", "unsupported", "missing")]
+                        ok = sum(1 for i in vi if i["final"] == "supported")
                         sup.append({"concept": f"{p}:{pc['id']}", "label": pc["label"],
                                     "kind": next(m["kind"] for m in pc["maps_to"] if m.get("target") == ref),
                                     "verified": f"{ok}/{len(vi)}" if vi else "unchecked",
@@ -96,6 +97,10 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
         raise ReviewError(f"revise needs a comment: {bad[:10]}")
     verdict = {i["ref"]: i for i in items}
     counts = {v: 0 for v in VERDICTS}
+    from ontologizer.core.levels import Preset
+    confirmation = Preset.load(run.cfg.preset_path).min_families
+    lowered = Frame.load(run.cfg).admission_families(confirmation) < confirmation
+    unconfirmed = 0
     rejected = set()
     for lv, f in shared_files(run.cfg).items():
         d = json.loads(f.read_text())
@@ -108,7 +113,11 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
                 continue
             counts[i["verdict"]] += 1
             if i["verdict"] == "accept":
-                c["status"] = "asserted"
+                if lowered and len(i.get("families") or []) < confirmation:
+                    c["status"] = "hypothesis"   # accepted, but nothing independent stands behind it yet
+                    unconfirmed += 1
+                else:
+                    c["status"] = "asserted"
             elif i["verdict"] == "reject":
                 rejected.add(ref)
                 continue
@@ -137,7 +146,7 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
     note = f"run {run.id}" + (f"; reviewer effort {effort}" if effort else "")
     entry = framing.approve(run.cfg, "review", p, by=by, at=now(), note=note, covers=covers)
-    return {**counts, "mappings_removed": unbound, "gate": entry}
+    return {**counts, "accepted_unconfirmed": unconfirmed, "mappings_removed": unbound, "gate": entry}
 
 
 def require_review(cfg) -> tuple[bool, str]:

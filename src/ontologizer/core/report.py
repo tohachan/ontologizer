@@ -22,6 +22,7 @@ import yaml
 from ontologizer.core.frame import Frame
 from ontologizer.core.run import Run, load_json, now, save_json
 from ontologizer.core.shared import application_docs, shared_concepts
+from ontologizer.core.verify import final_items
 
 DEFAULT_MIN_FAMILIES = 2
 
@@ -44,6 +45,7 @@ def support(run: Run, frame: Frame) -> dict[str, dict]:
 
 def stability(run: Run, frame: Frame) -> dict:
     need = min_families(run)
+    admission = frame.admission_families(need)
     sup = support(run, frame)
     rows = {}
     for ref, s in sorted(sup.items()):
@@ -52,11 +54,14 @@ def stability(run: Run, frame: Frame) -> dict:
         for p in sorted(s["projects"]):
             if len({frame.family_of(q) for q in s["projects"] - {p}}) < need:
                 breaks.append(p)
-        mark = "unsupported" if len(fams) < need else ("fragile" if breaks else "stable")
+        if len(fams) < need:   # admitted below the confirmation threshold is not the same as without support
+            mark = "unconfirmed" if len(fams) >= admission else "unsupported"
+        else:
+            mark = "fragile" if breaks else "stable"
         rows[ref] = {"label": s["label"], "level": s["level"], "projects": sorted(s["projects"]),
                      "families": sorted(fams), "mark": mark, "breaks_without": breaks}
     marks = Counter(r["mark"] for r in rows.values())
-    doc = {"run": run.id, "at": now(), "min_families": need, "concepts": rows, "marks": dict(marks),
+    doc = {"run": run.id, "at": now(), "min_families": need, "admission_families": admission, "concepts": rows, "marks": dict(marks),
            "stable_share": round(marks["stable"] / len(rows), 3) if rows else None}
     save_json(run.path("stability.json"), doc)
     return doc
@@ -174,7 +179,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
     agree_all: list[float] = []
     policies: dict[str, int] = {}
     recheck_types: dict[str, dict] = {}
-    ev_checked = ev_sup = 0
+    ev_checked = ev_sup = ev_final = 0
     cov_num = cov_den = 0
     unmeasured = []
     for p in projects:
@@ -222,6 +227,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
             if v["evidence"]["share"] is not None:
                 ev_checked += v["evidence"]["checked"]
                 ev_sup += v["evidence"]["supported"]
+                ev_final += sum(1 for i in final_items(run, p, v) if i["final"] == "supported")
             for t, x in ((v.get("applied") or {}).get("recheck_by_type") or {}).items():
                 acc = recheck_types.setdefault(t, {"rechecked": 0, "changed": 0})
                 acc["rechecked"] += x["rechecked"]
@@ -253,6 +259,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
             "target": {"compared": tgt_cmp, "disagree": tgt_dis,
                        "rate": round(tgt_dis / tgt_cmp, 3) if tgt_cmp else None}},
         "verified_evidence_share": round(ev_sup / ev_checked, 3) if ev_checked else None,
+        "verified_evidence_share_after_recheck": round(ev_final / ev_checked, 3) if ev_checked else None,
         "recheck_change_rate": {t: round(x["changed"] / x["rechecked"], 3) for t, x in sorted(recheck_types.items())
                                 if x["rechecked"]} or None,
         "loo_stability": st["stable_share"],
@@ -261,6 +268,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
     cons = consistency(engine)
     metrics["consistency_clashes"] = cons.get("clashes") if cons and "clashes" in cons else None
     doc = {"run": run.id, "at": now(), "study": frame.h.get("study"), "projects": projects,
+           "descriptions": [p for p in projects if frame.source_kind(p) == "description"],
            "metrics": metrics, "per_project": per, "stability_marks": st["marks"], "shared": shared,
            "competency_questions": cqs, "targets": target_fit(frame, cqs, projects),
            "consistency": cons,
@@ -295,10 +303,17 @@ def render(doc: dict) -> str:
              f"{_fmt(m.get('extraction_agreement_all'))} |",
              f"| Jev–LLM disagreement, category | {_fmt(j['category']['rate'])} ({j['category']['disagree']}/{j['category']['compared']}) |",
              f"| Jev–LLM disagreement, mapping target | {_fmt(j['target']['rate'])} ({j['target']['disagree']}/{j['target']['compared']}) |",
-             f"| Verified-evidence share | {_fmt(m['verified_evidence_share'])} |",
+             f"| Verified-evidence share, first judgement | {_fmt(m['verified_evidence_share'])} |",
+             f"| Verified-evidence share, after the recheck | {_fmt(m.get('verified_evidence_share_after_recheck'))} |",
              f"| Leave-one-out stability | {_fmt(m['loo_stability'])} |",
              f"| Competency-question coverage | {_fmt(m['cq_coverage'])} |",
              f"| Consistency clashes (engine reasoning) | {_fmt(m.get('consistency_clashes'))} |", ""]
+    if doc.get("descriptions"):
+        lines += [f"Descriptions, not implementations: {', '.join(doc['descriptions'])}. Their verified evidence means "
+                  "the text says so, not that it holds in a running system.", ""]
+    if (doc.get("stability_marks") or {}).get("unconfirmed"):
+        lines += [f"{doc['stability_marks']['unconfirmed']} shared concepts are unconfirmed: admitted without the "
+                  "independent support that confirmation needs, so they stay hypotheses.", ""]
     if m["inventory_unmeasured"]:
         lines += [f"Coverage unmeasured for: {', '.join(m['inventory_unmeasured'])}.", ""]
     c = doc.get("consistency")

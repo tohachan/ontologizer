@@ -76,7 +76,8 @@ def render(run: Run, frame: Frame, project: str, ex_id: str, part: int | None = 
     domains = "; ".join(f"**{d['label']}**: {d['boundary']}" for d in frame.h.get("domains", []))
     cap = run.max_concepts
     cmd = f"uv run --project {KIT_ROOT} ontologizer validate {output_path(run, project, ex_id, part)}"
-    return (KIT_ROOT / "templates" / "extract-brief.md").read_text().format(
+    template = "extract-brief-description.md" if frame.source_kind(project) == "description" else "extract-brief.md"
+    return (KIT_ROOT / "templates" / template).read_text().format(
         project=project, extractor_id=ex_id, part_label="" if part is None else f", part {part}",
         run=run.id, frame_summary=f"Domains: {domains}", out_of_scope="; ".join(frame.h.get("out_of_scope") or [])
         or "nothing listed", never_read=_never_read(run, frame, src["dir"]),
