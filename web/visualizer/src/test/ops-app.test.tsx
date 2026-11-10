@@ -89,7 +89,7 @@ it('groups, collapses, annotates and hides by changing only the spec, on the sam
   await screen.findByLabelText('concept A');
 
   expect(new Set(sent.slice(1).map((s) => s.snapshotId))).toEqual(new Set(['snap-1']));   // no new read for an edit
-  expect(requests.filter((r) => !/^(GET \/catalog|GET \/views|GET \/compilations\/.+|POST \/search|POST \/compile)$/.test(r))).toEqual([]);  // nothing writes
+  expect(requests.filter((r) => !/^(GET \/catalog|GET \/views|GET \/agent\/harnesses|GET \/compilations\/.+|POST \/search|POST \/compile)$/.test(r))).toEqual([]);  // nothing writes
 });
 
 it('summarizes a picked path with each step\'s direction', async () => {

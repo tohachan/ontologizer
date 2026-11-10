@@ -69,6 +69,11 @@ Those are the pinned versions. The exact chunk names and fields are those of `ui
 {"view": {"spec": "<the ViewSpec of the open view>", "compileId": "...", "picked": ["<node or edge id>"]}}
 ```
 
+`messageId` is present only on a regenerate. For a new message JSON drops it, so the body is
+`{"view", "id", "messages", "trigger": "submit-message"}`, and `id` is the session id. `view.compileId` is
+null before the first diagram. `view.picked` holds the picked cards and links, which the page shows as
+context chips above the input ("this one").
+
 The service takes the text of the last user message as the turn's input. The harness keeps the
 conversation itself (`--resume` for Claude, `exec resume` for Codex). Before the turn starts, the service
 stores `view` as the session's current view; the tools read it.
@@ -91,6 +96,14 @@ stores `view` as the session's current view; the tools read it.
 
 The tool names are the bare ones from §4 (`apply_view`), not the harness's prefixed form
 (`mcp__view__apply_view`).
+
+The page reads the stream through `useChat`:
+
+- A tool chunk without `dynamic: true` becomes a part of type `tool-<name>`; with it, `dynamic-tool`.
+  The page shows both the same way.
+- A `tool-input-available` with no `tool-input-start` before it is enough.
+- An `error` chunk ends the turn as failed and shows inline.
+- After `stop`, the page marks tool calls still waiting for an output as stopped.
 
 ## 4. View tools (MCP)
 
@@ -132,6 +145,11 @@ Each tool's result is a `content` list with one `text` item holding JSON. Result
 
 The page shows it as an entry with an undo button. It also applies the spec through its usual compile path,
 reusing the snapshot when the scope is unchanged, and lays the view out again.
+
+- If the spec has no `arrangement`, the page keeps its own.
+- The `id` must be unique within a session: the page keys the entry, and the spec to undo to, on it.
+- The entry's **Undo** is local. It re-applies the spec the page had just before that entry arrived, and
+  does not call the agent. The agent learns of it from `view` on the next request.
 
 ## 5. Sign-in
 

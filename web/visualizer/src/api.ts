@@ -1,8 +1,9 @@
 // Same-origin client of the visualizer API. Every failure is an ApiFailure: a failed call never
 // looks like an empty result.
+import type { Harness, HarnessName, Login } from './agentTypes';
 import type { Artifact, Catalog, Compilation, ElementDetail, Layout, OwnerCatalog, SavedView, SearchHit, ViewSpec } from './types';
 
-const BASE = '/visualizer/api';
+export const BASE = '/visualizer/api';
 
 export class ApiFailure extends Error {
   constructor(public status: number, public code: string, message: string, public details: unknown = null) {
@@ -13,7 +14,7 @@ export class ApiFailure extends Error {
 async function call<T>(path: string, body?: unknown, signal?: AbortSignal, method = 'POST'): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(BASE + path, body === undefined ? { signal } : {
+    res = await fetch(BASE + path, body === undefined ? (method === 'POST' ? { signal } : { method, signal }) : {
       method, signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
   } catch (e) {
@@ -54,4 +55,20 @@ export const api = {
     call<{ id: string; revision: number }>(`/views/${encodeURIComponent(id)}`, { owner, compileId, layout, expectedRevision }, undefined, 'PUT'),
   element: (compileId: string, elementId: string) =>
     call<ElementDetail>(`/compilations/${encodeURIComponent(compileId)}/elements/${encodeURIComponent(elementId)}`),
+};
+
+// The agent's routes (docs/visualizer-agent.md §2). With the agent off, each answers 501 `agent-disabled`.
+const enc = encodeURIComponent;
+export const agentApi = {
+  harnesses: () => call<{ harnesses: Harness[] }>('/agent/harnesses'),
+  login: (name: HarnessName) => call<{ loginId: string }>(`/agent/harnesses/${enc(name)}/login`, {}),
+  loginState: (id: string) => call<Login>(`/agent/logins/${enc(id)}`),
+  loginCode: (id: string, code: string) => call<{ state: Login['state'] }>(`/agent/logins/${enc(id)}/code`, { code }),
+  cancelLogin: (id: string) => call<object>(`/agent/logins/${enc(id)}`, undefined, undefined, 'DELETE'),
+  createSession: (owner: string, harness: HarnessName) => call<{ sessionId: string }>('/agent/sessions', { owner, harness }),
+  endSession: (id: string) => call<object>(`/agent/sessions/${enc(id)}`, undefined, undefined, 'DELETE'),
+  stop: (id: string) => call<object>(`/agent/sessions/${enc(id)}/stop`, {}),
+  chatUrl: (id: string) => `${BASE}/agent/sessions/${enc(id)}/chat`,
+  // on pagehide: a request that outlives the page, whose answer nobody reads
+  endSessionOnLeave: (id: string) => { try { void fetch(`${BASE}/agent/sessions/${enc(id)}`, { method: 'DELETE', keepalive: true }).catch(() => {}); } catch { /* the page is going */ } },
 };

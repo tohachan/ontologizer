@@ -27,7 +27,12 @@ type Props = {
   shownFrom?: Record<string, number> | null;             // context cards of the last diagram per graph, when it has this scope
   cut?: boolean;                                         // the last diagram left concepts out at its display limit
   pending?: boolean;                                     // the settings differ from those the diagram was compiled with
+  agent?: ReactNode;                                     // the Agent tab; without it the sidebar is the settings alone
+  tab?: SidebarTab; onTab?: (t: SidebarTab) => void;
 };
+
+export type SidebarTab = 'agent' | 'settings';
+export const TABS: readonly SidebarTab[] = ['agent', 'settings'];
 
 // The kit's vocabulary and the upper ontology are read for what they say about the cards, never drawn as cards
 // (core/views/reader.py drops the kit's own IRIs; project.py turns upper classes into category tags).
@@ -74,14 +79,31 @@ export function Sidebar(p: Props) {
   const kindFacts = new Map(p.facts?.kinds.map((k) => [k.kind, k]) ?? []);
   const ownLevels = new Set(p.graphs.filter((g) => s.primary.includes(g.path)).map((g) => g.level).filter(Boolean));
   const reach = reachOf(s, p.graphs);
+  const tab = p.tab ?? 'agent';
   return (
-    <nav className="sidebar" aria-label="view settings">
+    <nav className="sidebar" aria-label="sidebar">
       <label>Owner{' '}
         <select value={p.owner ?? ''} onChange={(e) => p.onOwner(e.target.value)} aria-label="owner">
           <option value="" disabled>choose…</option>
           {p.owners.map((o) => <option key={o.name} value={o.name} disabled={!o.available}>{o.name}{o.available ? '' : ' (not available)'}</option>)}
         </select>
       </label>
+      {p.agent !== undefined && (
+        <div role="tablist" className="tabs" aria-label="sidebar tabs">
+          {TABS.map((t) => (
+            <button key={t} type="button" role="tab" id={`tab-${t}`} aria-controls={`panel-${t}`} aria-selected={tab === t}
+                    onClick={() => p.onTab?.(t)}>{t === 'agent' ? 'Agent' : 'Settings'}</button>
+          ))}
+        </div>
+      )}
+      {p.agent !== undefined && (
+        // both panels stay mounted, so the chat and the settings' own state live through a switch
+        <div role="tabpanel" id="panel-agent" aria-labelledby="tab-agent" className="panel agent-panel" hidden={tab !== 'agent'}>
+          {p.agent}
+        </div>
+      )}
+      <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" aria-label="view settings" className="panel"
+           hidden={p.agent !== undefined && tab !== 'settings'}>
       {p.children}
       {p.owner && (
         <>
@@ -229,6 +251,7 @@ export function Sidebar(p: Props) {
             {p.busy ? 'Compiling…' : 'Show diagram'}</button>
         </>
       )}
+      </div>
     </nav>
   );
 }
