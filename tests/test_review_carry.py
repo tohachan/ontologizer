@@ -162,6 +162,9 @@ def test_applying_a_revise_twice_notes_it_once(study, tmp_path):
     review.apply(run, "reviewer")
     session = next(c for c in _level(seeds, "domain")["concepts"] if c["id"] == "session")
     assert session["note"].count("Review (reviewer, r1): wrong") == 1
+    review.apply(run, "another signature")             # signed otherwise: still the same remark
+    session = next(c for c in _level(seeds, "domain")["concepts"] if c["id"] == "session")
+    assert session["note"].count("r1): wrong") == 1
 
 
 # ---- 4. verification shown honestly ------------------------------------------------------

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import random
 from pathlib import Path
 
@@ -339,13 +340,13 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
                 else:
                     c["status"] = "asserted"
                 if i.get("comment") and not is_carried(i):   # a carried comment reached the note in its own run
-                    _note(c, f"Review ({by}, {run.id}): {i['comment']}")
+                    _note(c, by, run.id, i["comment"])
             elif i["verdict"] == "reject":
                 rejected.add(ref)
                 continue
             else:
                 c["status"] = "hypothesis"
-                _note(c, f"Review ({by}, {run.id}): {i['comment']}")
+                _note(c, by, run.id, i["comment"])
             e = held.get(ref)
             if carry_dispute(c, e):
                 disputed += 1
@@ -389,10 +390,13 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
             "support_changed": changed}
 
 
-def _note(c: dict, remark: str) -> None:
-    """Append a review remark to a concept's note once: applying the same review again adds nothing."""
-    if remark not in c.get("note", ""):
-        c["note"] = (c.get("note", "") + " " + remark).strip()
+def _note(c: dict, by: str, run_id: str, comment: str) -> None:
+    """Append a review remark to a concept's note once: applying the same review again adds nothing, whoever
+    signs the second apply (the remark is the run's comment, not the signature)."""
+    note = c.get("note", "")
+    if re.search(r"Review \([^()]*, " + re.escape(run_id) + r"\): " + re.escape(comment), note):
+        return
+    c["note"] = (note + f" Review ({by}, {run_id}): {comment}").strip()
 
 
 def require_review(cfg) -> tuple[bool, str]:
