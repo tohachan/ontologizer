@@ -11,6 +11,7 @@
 !vendor/
 !schemas/
 !web/visualizer/
+!deps/visualizer/agent/
 web/visualizer/node_modules
 web/visualizer/dist
 **/__pycache__

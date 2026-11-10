@@ -93,6 +93,12 @@ cmd_status() {
     echo "answers:   no"
   fi
   echo "generated: $out"
+  # The agent's sign-in (docs/visualizer-agent.md §6) lives in this volume; `viz.sh down` keeps it.
+  if docker volume inspect visualizer-agent-home >/dev/null 2>&1; then
+    echo "agent:     volume visualizer-agent-home"
+  else
+    echo "agent:     no volume yet (created by up)"
+  fi
 }
 
 cmd=${1:-}; [ $# -gt 0 ] && shift

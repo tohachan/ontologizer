@@ -88,3 +88,4 @@ button.primary { background: var(--accent); color: #fff; border: 0; padding: 8px
 .agent-off p, .signin p { margin: 4px 0; font-size: 13px; } .agent-off code { font-size: 12px; word-break: break-all; }
 .signin { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; } .signin a { word-break: break-all; }
 .user-code { font-size: 15px; font-weight: 600; letter-spacing: 0.06em; }
+.view-entry > button { flex: none; white-space: nowrap; }

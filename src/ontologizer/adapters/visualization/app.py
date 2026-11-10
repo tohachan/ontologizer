@@ -14,7 +14,7 @@ import time
 import mimetypes
 import uuid
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -36,6 +36,7 @@ from ontologizer.ports.engine import EngineError, EngineUnavailable
 from ontologizer.ports.view_planner import CONTRACT_VERSION, PlannerError, ViewPlanner
 
 API = "/visualizer/api"
+MCP = "/visualizer/mcp"                      # the view tools' MCP endpoint, for the agent's harness only
 MAX_STATEMENTS = 200
 
 
@@ -44,6 +45,7 @@ class Response:
     status: int
     body: bytes
     headers: tuple[tuple[str, str], ...] = ()
+    stream: Iterable[bytes] | None = None     # a streamed body (the agent's chat); `body` is then empty
 
 
 class ApiError(Exception):
@@ -63,6 +65,7 @@ class Settings:
     max_parallel_reads: int = 2
     read_wait: float = 10
     static_dir: Path | None = None            # the built browser bundle (web/visualizer/dist)
+    mcp_hosts: tuple[str, ...] = ()           # further Host values of the MCP route: 127.0.0.1:<own port>
 
 
 class _Cache:
@@ -107,6 +110,7 @@ class Visualizer:
     settings: Settings
     clock: Callable[[], float] = time.monotonic
     planner: ViewPlanner | None = None          # off unless the hub configures one
+    agent: object | None = None                 # the agent bridge (agent.py); off unless the hub enables it
     snapshots: _Cache = field(init=False)
     compilations: _Cache = field(init=False)
     graph_list: _Cache = field(init=False)
@@ -123,9 +127,11 @@ class Visualizer:
         request_id = uuid.uuid4().hex[:12]
         h = {k.lower(): v for k, v in headers.items()}
         try:
-            self._guard(method, h, body)
             url = urlsplit(target)
             path = unquote(url.path)
+            if path.startswith(MCP + "/"):
+                return self._mcp(method, path, headers, h, body)
+            self._guard(method, h, body)
             if not path.startswith(API + "/"):
                 if method != "GET":
                     raise ApiError(405, "method-not-allowed", f"{method} is not supported here")
@@ -134,7 +140,7 @@ class Visualizer:
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
             payload = self._json(body) if method in ("POST", "PUT") else None
             status, out = self._route(method, route, query, payload)
-            return _json_response(status, out)
+            return out if isinstance(out, Response) else _json_response(status, out)
         except ApiError as e:
             return error_response(e.status, e.code, e.message, e.details, request_id)
         except Exception:
@@ -152,7 +158,7 @@ class Visualizer:
                 raise ApiError(415, "unsupported-media-type", "send JSON with Content-Type: application/json")
             if len(body) > self.settings.max_body:
                 raise ApiError(413, "payload-too-large", f"the request body exceeds {self.settings.max_body} bytes")
-        elif method != "GET":
+        elif method not in ("GET", "DELETE"):
             raise ApiError(405, "method-not-allowed", f"{method} is not supported")
 
     @staticmethod
@@ -190,7 +196,67 @@ class Visualizer:
             case (_, ["health"] | ["catalog"] | ["search"] | ["compile"] | ["plan"] | ["overview"] | ["views"]
                   | ["views", _]):
                 raise ApiError(405, "method-not-allowed", f"{method} is not supported here")
+            case (_, ["agent", *rest]):
+                return self._agent_route(method, rest, payload)
         raise ApiError(404, "not-found", "no such endpoint")
+
+    # ---- the agent (docs/visualizer-agent.md §2); the bridge is agent.py ----------------------
+    def _agent_route(self, method, route, payload):
+        a = self.agent
+        if a is None:
+            raise ApiError(501, "agent-disabled", "the agent is turned off in this service")
+        match (method, route):
+            case ("GET", ["harnesses"]):
+                return 200, a.harness_list()
+            case ("POST", ["harnesses", name, "login"]):
+                return 200, a.logins.start(name)
+            case ("GET", ["logins", lid]):
+                return 200, a.logins.status(lid)
+            case ("POST", ["logins", lid, "code"]):
+                return 200, a.logins.code(lid, payload.get("code"))
+            case ("DELETE", ["logins", lid]):
+                return 200, a.logins.cancel(lid)
+            case ("POST", ["sessions"]):
+                owner = payload.get("owner")
+                self._config(owner)
+                return 200, a.create_session(owner, payload.get("harness"))
+            case ("DELETE", ["sessions", sid]):
+                return 200, a.end_session(sid)
+            case ("POST", ["sessions", sid, "chat"]):
+                stream = a.chat(sid, payload)
+                return 200, Response(200, b"", tuple(stream.headers), stream)
+            case ("POST", ["sessions", sid, "stop"]):
+                return 200, a.stop(sid)
+            case (_, ["harnesses"] | ["harnesses", _, "login"] | ["logins", _] | ["logins", _, "code"] | ["sessions"]
+                  | ["sessions", _] | ["sessions", _, "chat" | "stop"]):
+                raise ApiError(405, "method-not-allowed", f"{method} is not supported here")
+        raise ApiError(404, "not-found", "no such endpoint")
+
+    def _mcp(self, method, path, headers, h, body) -> Response:
+        """`POST /visualizer/mcp/{sessionId}`: reached by the harness at 127.0.0.1:<own port>, never by a page.
+        The bearer check is the bridge's; the protocol is the view tools' endpoint."""
+        if h.get("host") not in (*self.settings.allowed_hosts, *self.settings.mcp_hosts):
+            raise ApiError(421, "forbidden-host", "this service does not answer to that host name")
+        if h.get("origin") is not None:
+            raise ApiError(403, "forbidden-origin", "the MCP endpoint is not for pages")
+        if self.agent is None:
+            raise ApiError(501, "agent-disabled", "the agent is turned off in this service")
+        rest = path[len(MCP) + 1:].split("/")
+        if len(rest) != 1 or not rest[0]:
+            raise ApiError(404, "not-found", "no such endpoint")
+        if method != "POST":
+            raise ApiError(405, "method-not-allowed", "the MCP endpoint takes POST only (no SSE stream)")
+        if h.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            raise ApiError(415, "unsupported-media-type", "send JSON with Content-Type: application/json")
+        status, out_headers, out = self.agent.mcp(rest[0], headers, body)
+        pairs = tuple((out_headers or {}).items()) if isinstance(out_headers, Mapping) else tuple(out_headers or ())
+        if out is None:
+            return Response(status, b"", pairs)
+        if isinstance(out, (bytes, bytearray)):
+            return Response(status, bytes(out), pairs)
+        if not any(k.lower() == "content-type" for k, _ in pairs):
+            pairs += (("Content-Type", "application/json"),)
+        return Response(status, json.dumps(out, ensure_ascii=False, separators=(",", ":")).encode(), pairs)
 
     def _static(self, path: str) -> Response:
         """The browser bundle. A path that does not name a file of the bundle gets index.html, so a

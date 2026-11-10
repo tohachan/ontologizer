@@ -31,6 +31,10 @@ jev = "ontologizer.adapters.decisions.jev:factory"
 [project.entry-points."ontologizer.view_planner"]
 chat = "ontologizer.adapters.view_planner.chat:factory"
 
+[project.entry-points."ontologizer.view_agent"]
+claude = "ontologizer.adapters.visualization.harness_claude:factory"
+codex = "ontologizer.adapters.visualization.harness_codex:factory"
+
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
 build-backend = "uv_build"

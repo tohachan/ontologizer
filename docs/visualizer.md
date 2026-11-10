@@ -455,6 +455,14 @@ Refresh recompiles the same ViewSpec in tolerant mode against a new snapshot and
 
 Manual annotations and grouping do not imply accepted ontology changes. Deleting an element from a view changes only the view. Any later feature that writes ontology data must use the existing extraction and write route and is a separately scoped feature.
 
+## Agent
+
+The sidebar opens on an Agent tab: a chat with a harness, Claude Code or Codex, run as a CLI by the service. The agent rebuilds the open view on request through view tools served over MCP, and nothing else. Its views reach the page at once, each with an undo. Today's controls are in the Settings tab.
+
+The agent is off by default. To turn it on, set `visualizer.agent.enabled: true` in the hub's `ontologizer.local.yaml`. Sign-in is by subscription, from the page. The contract (routes, chat stream, tools, sign-in, safety, where it runs) is [visualizer-agent.md](visualizer-agent.md).
+
+The planner below is the older, single-call path. It stays for hubs that configure it.
+
 ## Natural language planning
 
 The planner is a separate module so that it can be turned off or improved without touching the rest:
