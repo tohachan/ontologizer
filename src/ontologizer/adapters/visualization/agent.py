@@ -127,7 +127,7 @@ class TurnStream:
 @dataclass
 class AgentSession:
     id: str
-    owner: str
+    owner: str | None                        # unused since ONTO-49: the chat request's `view.owner` names it
     harness: str
     view: object                             # the view tools' ViewSession: .secret, .current, .events
     root: Path                               # private: cwd/ (the harness's empty working directory), turn files
@@ -228,7 +228,7 @@ class AgentService:
             raise ApiError(404, "unknown-session", "no such agent session; start a new one")
         return s
 
-    def create_session(self, owner: str, harness) -> dict:
+    def create_session(self, owner: str | None, harness) -> dict:
         self._sweep()
         h = self.harness(harness)
         if self._exe(h) is None:

@@ -477,9 +477,14 @@ def test_with_the_agent_off_every_agent_route_is_501(app):
 def test_agent_routes(app, tmp_path):
     app.agent, _ = service(tmp_path)
     assert call(app, "GET", "agent/harnesses")[1]["harnesses"][0]["name"] == "claude"
-    assert call(app, "POST", "agent/sessions", {"owner": "ghost", "harness": "claude"})[0] == 404
-    status, out = call(app, "POST", "agent/sessions", {"owner": "study", "harness": "claude"})
+    status, out = call(app, "POST", "agent/sessions", {"harness": "claude"})
     sid = out["sessionId"]
+    assert status == 200 and app.agent.sessions[sid].owner is None and app.agent.sessions[sid].view.owner is None
+    # an owner sent by an older page is accepted and ignored, even an unknown one (ONTO-49)
+    for owner in ("study", "ghost"):
+        status, out = call(app, "POST", "agent/sessions", {"owner": owner, "harness": "claude"})
+        assert status == 200 and app.agent.sessions[out["sessionId"]].view.owner is None
+        app.agent.end_session(out["sessionId"])
     r = app.handle("POST", f"/visualizer/api/agent/sessions/{sid}/chat", {"Host": HOST, "Content-Type": "application/json"},
                    json.dumps(chat_body()).encode())
     assert r.status == 200 and r.body == b"" and dict(r.headers)["Content-Type"] == "text/event-stream"
@@ -672,3 +677,19 @@ def test_the_service_builds_view_sessions_with_the_owner_and_id_in_their_places(
     svc = server.build_agent({"harnesses": ["claude"]}, Path("."), app=object())
     vs = svc.new_view_session("sid-1", "owner-1")
     assert (vs.id, vs.owner) == ("sid-1", "owner-1") and vs.secret
+    vs = svc.new_view_session("sid-2", None)                 # sessions are not bound to an owner (ONTO-49)
+    assert vs.owner is None
+
+
+def test_the_chat_request_carries_the_views_owner_to_the_view_session(tmp_path):
+    """The bridge stores the request's `view` as the view session's current view, owner included."""
+    from ontologizer.adapters.visualization import view_tools
+    h = FakeClaude().setup("replay", tmp_path / "record.json")
+    h.fixtures = [FIX / "claude-turn.jsonl", FIX / "claude-turn.jsonl"]
+    svc = AgentService({h.name: h}, lambda sid, owner: view_tools.ViewSession(owner=owner, id=sid), StubEndpoint(),
+                       settings=AgentSettings(home=tmp_path / "home"))
+    sid = svc.create_session(None, "claude")["sessionId"]
+    events(svc.chat(sid, chat_body(view={"owner": "study", "spec": None, "compileId": None, "picked": []})))
+    assert svc.sessions[sid].view.current["owner"] == "study"
+    events(svc.chat(sid, chat_body(view={"owner": None, "spec": None})))
+    assert svc.sessions[sid].view.current == {"owner": None, "spec": None, "compileId": None, "picked": []}

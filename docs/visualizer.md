@@ -457,7 +457,7 @@ Manual annotations and grouping do not imply accepted ontology changes. Deleting
 
 ## Agent
 
-The sidebar opens on an Agent tab: a chat with a harness, Claude Code or Codex, run as a CLI by the service. The agent rebuilds the open view on request through view tools served over MCP, and nothing else. Its views reach the page at once, each with an undo. Today's controls are in the Settings tab.
+The sidebar opens on an Agent tab: a chat with a harness, Claude Code or Codex, run as a CLI by the service. The agent rebuilds the open view on request through view tools served over MCP, and nothing else. Its views reach the page at once, each with an undo. Today's controls are in the Settings tab. A chat is not bound to an owner: the tools search and list the concepts of every owner the hub registers, and a view the agent applies may belong to another owner than the open one.
 
 The agent is off by default. To turn it on, set `visualizer.agent.enabled: true` in the hub's `ontologizer.local.yaml`. Sign-in is by subscription, from the page. The contract (routes, chat stream, tools, sign-in, safety, where it runs) is [visualizer-agent.md](visualizer-agent.md).
 
@@ -487,7 +487,7 @@ A request to “show” a diagram may update the current preview directly becaus
 
 If a name resolves to several concepts, present the candidates with graph, level, and definition instead of guessing. Allow at most one automatic repair attempt for invalid structured output, then return a useful diagnostic. A provider timeout leaves the current view intact. A planner can add annotation text but cannot invent a source-backed edge or promote a source hypothesis to an asserted fact.
 
-Natural language tests must include Russian requests against English labels. The Studio sidecar's ASCII term extraction is not an acceptable implementation for this product. The manual search endpoint still matches labels and definitions directly, with Unicode case folding; it does not translate.
+Natural language tests must include Russian requests against English labels. The Studio sidecar's ASCII term extraction is not an acceptable implementation for this product. The manual search endpoint still matches labels and definitions directly: every word of the query, in any order, without case or accents, plurals through a stem (`core/views/match.py`); it does not translate.
 
 ## Deployment
 

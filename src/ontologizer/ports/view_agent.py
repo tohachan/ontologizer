@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-# The view tools of contract §4: the only tools a harness may call.
-VIEW_TOOLS = ("get_current_view", "get_catalog", "search_concepts", "describe_concept",
+# The view tools of contract §4 (and §7: list_concepts): the only tools a harness may call.
+VIEW_TOOLS = ("get_current_view", "get_catalog", "list_concepts", "search_concepts", "describe_concept",
               "preview_view", "apply_view", "undo_view")
 MCP_SERVER = "view"
 
