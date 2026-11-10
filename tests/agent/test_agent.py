@@ -464,6 +464,7 @@ def test_the_choices_come_from_the_config_else_the_built_in_lists():
     assert list(conf.models) == [{"id": "gpt-5.1-codex", "label": "gpt-5.1-codex"}, {"id": "gpt-5.1", "label": "GPT-5.1"},
                                  {"id": "o4-mini", "label": "o4-mini"}]       # unsafe ids dropped, the default added
     assert conf.default_model == "o4-mini"
+    assert Codex(models=["default", "gpt-5.1"]).choices().models[0] == {"id": "default", "label": "Default"}
     cl = harness_claude.factory({"model": "sonnet", "effort": "high", "efforts": ["low", "high", "max"]}).choices()
     assert cl.default_model == "sonnet" and cl.efforts == ("low", "high", "max") and cl.default_effort == "high"
     assert harness_claude.factory({"model": "--dangerously-skip-permissions"}).choices().default_model == "default"

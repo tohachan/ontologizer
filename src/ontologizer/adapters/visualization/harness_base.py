@@ -31,7 +31,7 @@ def choices(builtin_models, builtin_efforts=(), models=None, efforts=None, model
     for m in models if isinstance(models, (list, tuple)) and models else builtin_models:
         mid, label = (m.get("id"), m.get("label")) if isinstance(m, dict) else (m, None)
         if safe_id(mid) and mid not in {x["id"] for x in listed}:
-            listed.append({"id": mid, "label": str(label) if label else mid})
+            listed.append({"id": mid, "label": str(label) if label else "Default" if mid == DEFAULT else mid})
     ids = {x["id"] for x in listed}
     default_model = safe_id(model)
     if default_model and default_model not in ids:

@@ -76,7 +76,7 @@ shape (`{"error": {"code", "message", "details"}}`).
 
 | Route | Body | Answer |
 | --- | --- | --- |
-| `GET agent/harnesses` | — | `{"harnesses": [{"name": "claude" \| "codex", "installed": bool, "signedIn": bool, "version": str \| null}]}` |
+| `GET agent/harnesses` | — | `{"harnesses": [{"name": "claude" \| "codex", "installed": bool, "signedIn": bool, "version": str \| null, "models": [{"id", "label"}], "defaultModel": str \| null, "efforts": [str], "defaultEffort": str \| null}]}` |
 | `POST agent/harnesses/{name}/login` | `{}` | `{"loginId"}`. Starts the sign-in (§5). |
 | `GET agent/logins/{loginId}` | — | `{"state": "starting" \| "open-url" \| "enter-code" \| "show-code" \| "done" \| "failed", "url": str \| null, "userCode": str \| null, "message": str \| null}` |
 | `POST agent/logins/{loginId}/code` | `{"code": str}` | `{"state"}`. For a flow that asks for a code to paste back. |
@@ -95,13 +95,21 @@ Further answers:
 - `POST agent/sessions` checks the owner as every route does (404 `unknown-owner`); an unknown harness is
   404 `unknown-harness`, one not installed 409 `harness-not-installed`.
 - `POST …/chat` answers 409 `turn-in-progress` while a turn runs, 404 `unknown-session` for an ended or
-  expired session. The service reads only the last user message's text parts (at most 8000 characters), so
+  expired session, 400 `unknown-model` or `unknown-effort` for an `agent` choice the harness does not list. The service reads only the last user message's text parts (at most 8000 characters), so
   the page may send just that message (`prepareSendMessagesRequest`); the body limit is the service's 1 MiB.
 - `POST …/code` answers 409 `login-not-waiting` unless the sign-in is in `enter-code`; the code has no spaces.
 - Harnesses are adapters chosen by name: `visualizer.agent.harnesses` (default `[claude, codex]`), resolved in
   the entry-point group `ontologizer.view_agent` (port `ports/view_agent.py`). Options per harness go under
-  `visualizer.agent.<name>`: `command`, `model` (and `effort` for Claude); for Codex also `config` (more
-  `-c key=value`, never a secret), `disable` (the feature list) and `env_passthrough` (variable names to pass).
+  `visualizer.agent.<name>`: `command`, `model` and `models` (and `effort` and `efforts` for Claude); for Codex
+  also `config` (more `-c key=value`, never a secret), `disable` (the feature list) and `env_passthrough`
+  (variable names to pass).
+- The choices of `GET agent/harnesses` (ONTO-47): `models` is the config's `models` (a list of ids, or of
+  `{id, label}`) when set, else the built-in list: for Claude `default`, `opus`, `sonnet`, `haiku` (Claude's own
+  aliases), with efforts `low`, `medium`, `high`; for Codex `default` alone, since the models an account may
+  use differ (a machine lists its own). `defaultModel` is the config's `model`, else `default` when listed;
+  `defaultEffort` the config's `effort`, else null. An id that does not match
+  `[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}` is dropped, and a configured default missing from its list is
+  added to it. `default` is the harness's own choice: no `--model` or `-m` flag.
 
 ## 3. The chat stream: AI SDK UI message stream
 
@@ -111,16 +119,25 @@ Those are the pinned versions. The exact chunk names and fields are those of `ui
 `ai@7.0.153`. Both sides read them from that package, not from memory.
 
 **Request.** `POST agent/sessions/{id}/chat`. The body is what the AI SDK's `DefaultChatTransport` sends:
-`{"id", "messages": [UIMessage…], "trigger", "messageId"}`. The page adds `"view"`:
+`{"id", "messages": [UIMessage…], "trigger", "messageId"}`. The page adds `"view"` and `"agent"`:
 
 ```json
-{"view": {"spec": "<the ViewSpec of the open view>", "compileId": "...", "picked": ["<node or edge id>"]}}
+{"view": {"owner": "<the page's owner>", "spec": "<the ViewSpec of the open view>", "compileId": "...",
+          "picked": ["<node or edge id>"]},
+ "agent": {"model": "haiku", "effort": "low"}}
 ```
 
 `messageId` is present only on a regenerate. For a new message JSON drops it, so the body is
-`{"view", "id", "messages", "trigger": "submit-message"}`, and `id` is the session id. `view.compileId` is
-null before the first diagram. `view.picked` holds the picked cards and links, which the page shows as
-context chips above the input ("this one").
+`{"view", "agent", "id", "messages", "trigger": "submit-message"}`, and `id` is the session id. With no
+diagram on the page `view` is `{"owner": null, "spec": null, "compileId": null, "picked": []}`, and the chat
+works all the same. `view.picked` holds the picked cards and links, which the page shows as context chips
+above the input ("this one").
+
+`agent` is the model and effort chosen in the Agent tab (§7). It applies to this turn and the following
+ones; a key left out keeps the session's earlier choice, and with none the harness's configured default
+applies. `default` or null is the harness's own choice (no flag). Only ids the harness lists are accepted, so
+nothing else reaches its command line. A changed model keeps the conversation: Claude takes `--model` with
+`--resume`, Codex `-m` with `exec resume` (both checked with `--help` on 2.1.322 and 0.166.0).
 
 The service takes the text of the last user message as the turn's input. The harness keeps the
 conversation itself (`--resume` for Claude, `exec resume` for Codex). Before the turn starts, the service
@@ -135,6 +152,7 @@ stores `view` as the session's current view; the tools read it.
 | Harness event | Chunks |
 | --- | --- |
 | start of turn | `start` (with `messageId`), `start-step` |
+| the answering model is known | `message-metadata` (`messageMetadata: {"harness", "model"}`) |
 | assistant text | `text-start`, `text-delta`… , `text-end` (one id per text block) |
 | thinking or reasoning, when the harness gives it | `reasoning-start`, `reasoning-delta`, `reasoning-end` |
 | a call of a view tool | `tool-input-available` (`toolCallId`, `toolName`, `input`); then `tool-output-available` (`toolCallId`, `output`), or `tool-output-error` |
@@ -155,6 +173,14 @@ on real runs of both harnesses:
 - `data-view` chunks come from the view session's queue, drained after each tool output and once more at
   the end of the turn, so a view always follows the output of the call that made it.
 - Lines starting with `:` (`: ping`) are SSE comments; the AI SDK's parser skips them.
+- One `message-metadata` per turn, merged by the AI SDK into the assistant message's `metadata`. `model` is the
+  one the harness reports, else the one requested, else null (the harness's default, unnamed):
+  - Claude names it in `system/init` (`"model": "claude-haiku-…"`), so the chunk follows that event, before any
+    text or tool chunk. A turn that ends before `system/init` gets the requested model at its end.
+  - `codex exec --json` 0.166.0 names no model: `thread.started` carries only `thread_id`, `turn.started`
+    nothing, and no item names one (checked on a real run). The chunk follows `start-step`, with the requested
+    model.
+  The page shows it under the answer, small and muted, or "default model" when it is null.
 
 The page reads the stream through `useChat`:
 
@@ -357,6 +383,13 @@ the cards land.
 - The `data-view` chunk's data gains `owner`: `{"spec", "summary", "undoOf", "owner"}`. When `owner` differs
   from the page's, the page switches to that owner, keeping the chat, and then applies the spec.
 - The Agent tab has no owner choice; the Settings tab keeps it.
+- On the page (built): the owner select sits in the Settings tab, and the header shows the current owner as
+  plain text. The session is created with `{"harness"}` and lives through any owner change; a fresh page with
+  no owner chats as well. A `data-view` whose `owner` differs from the page's switches the page as choosing
+  that owner in Settings does (its catalog and saved views, a new canvas), leaves the chat and the session
+  alone, and then compiles the spec for that owner. The agent's views and undos are applied one after the
+  other. Each entry's local **Undo** remembers the owner and spec before it (none, when no diagram was shown),
+  so it goes back across an owner switch too.
 
 **Models (ONTO-47).**
 
@@ -372,6 +405,11 @@ the cards land.
 - After `start`, the stream sends `{"type": "message-metadata", "messageMetadata": {"harness", "model"}}`.
   `model` is the one the harness reports (Claude's `system/init`), else the one requested, else null. The
   page shows it under the answer.
+- Built (§2, §3): the service checks `agent` against the listed choices; Codex reports no model, so its chunk
+  carries the requested one. On the page, the Agent tab has a model select under the harness choice, and for
+  Claude an effort select (`Default` sends null). Both are remembered per harness in `localStorage`
+  (`visualizer.agent.<harness>.model`, `.effort`); a remembered id the service no longer lists falls back to
+  `defaultModel`.
 
 **Tools that find concepts in a few calls (ONTO-48).**
 

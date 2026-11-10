@@ -425,7 +425,7 @@ export function App() {
                         arrangement={sel.layout.arrangement}
                         onArrangement={(a) => setSel((cur) => ({ ...cur, layout: { ...cur.layout, arrangement: a } }))} />
               </ReactFlowProvider>
-            : <p className="muted placeholder">{owner ? 'Choose graphs and starting concepts, then show the diagram.' : 'Choose an owner.'}</p>}
+            : <p className="muted placeholder">{owner ? 'Choose graphs and starting concepts, then show the diagram.' : 'Ask the agent for a view, or choose an owner in Settings.'}</p>}
         </section>
         {compilation && <Inspector compileId={compilation.compileId} elementId={focus} />}
       </main>
