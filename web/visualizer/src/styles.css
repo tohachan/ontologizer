@@ -42,3 +42,4 @@ button.primary { background: var(--accent); color: #fff; border: 0; padding: 8px
 .ask { display: inline-flex; gap: 4px; }
 .area.selected, .note.selected { outline: 3px solid var(--accent); }
 .savebar { margin-left: auto; display: flex; gap: 6px; }
+.limit-help { margin-top: 6px; } .limit-help p { margin: 4px 0; }

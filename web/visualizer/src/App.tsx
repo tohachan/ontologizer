@@ -18,6 +18,10 @@ const START: Selection = {
 
 function describe(e: unknown): string {
   if (e instanceof ApiFailure) {
+    if (e.code === 'display-limit' && e.details) {
+      const { count, limit } = e.details as { count: number; limit: number };
+      return `${count} cards must be shown (the starting concepts, group members and path-summary ends), but this view shows at most ${limit}.`;
+    }
     if (e.code === 'invalid-spec' && Array.isArray(e.details)) {
       return `${e.message}: ${(e.details as { path: string; message: string }[]).map((i) => `${i.path} ${i.message}`).join('; ')}`;
     }
@@ -36,6 +40,7 @@ export function App() {
   const [compilation, setCompilation] = useState<Compilation | null>(null);   // the last valid diagram
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [limitHit, setLimitHit] = useState<{ count: number; limit: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [extra, setExtra] = useState<ops.Extra>(ops.EMPTY);
   const [picked, setPicked] = useState<string[]>([]);
@@ -94,7 +99,7 @@ export function App() {
     const spec = buildSpec(s, x, opts.id ?? opened.id, opts.title ?? (opened.title || 'Untitled view'));
     const key = scopeKey(spec.scope);
     const mine = ++request.current;
-    setBusy(true); setError(null); setNotice(null);
+    setBusy(true); setError(null); setNotice(null); setLimitHit(null);
     try {
       let c: Compilation;
       try {
@@ -115,7 +120,10 @@ export function App() {
       setFocus((f) => (f && (c.diagram.nodes.some((n) => n.id === f) || c.diagram.edges.some((e) => e.id === f)) ? f : null));
       return c;
     } catch (e) {
-      if (mine === request.current) setError(describe(e));     // the last valid diagram stays
+      if (mine === request.current) {
+        setError(describe(e));                                 // the last valid diagram stays
+        if (e instanceof ApiFailure && e.code === 'display-limit' && e.details) setLimitHit(e.details as { count: number; limit: number });
+      }
       return null;
     } finally {
       if (mine === request.current) setBusy(false);
@@ -251,7 +259,10 @@ export function App() {
         {compilation && <SaveBar title={opened.title} isNew={opened.revision === null} busy={busy} onSave={save}
           onExport={() => owner && opened.revision !== null && api.view(owner, opened.id).then((a) => download(`${opened.id}.view.json`, a), (e) => setError(describe(e)))} />}
       </header>
-      {error && <div role="alert" className="error">{error}{compilation ? ' The diagram below is the last one that compiled.' : ''}</div>}
+      {error && <div role="alert" className="error">{error}{compilation ? ' The diagram below is the last one that compiled.' : ''}
+        {limitHit && <LimitHelp hit={limitHit} byLevel={sel.seeds.length === 0 && sel.levels.length > 0}
+          onRaise={(n) => void apply({ ...sel, layout: { ...sel.layout, maxNodes: n, maxEdges: Math.max(sel.layout.maxEdges, Math.min(400, 2 * n)) } }, extra)} />}
+      </div>}
       {notice && <div role="status" className="notice">{notice}</div>}
       {compilation?.diagnostics.length ? <div role="status" className="notice">{compilation.diagnostics.length} reference(s) no longer resolve: {compilation.diagnostics.map((d) => d.path).join(', ')}</div> : null}
       {compilation?.changes && <Changes c={compilation.changes} />}
@@ -331,5 +342,20 @@ function Ask({ onAsk, busy, candidates, onPick }: { onAsk: (q: string) => void; 
         </div>
       ))}
     </fieldset>
+  );
+}
+
+export const NODE_LIMITS = [40, 80, 120, 160, 200];
+const MAX_NODES = 200;
+
+function LimitHelp({ hit, byLevel, onRaise }: { hit: { count: number; limit: number }; byLevel: boolean; onRaise: (n: number) => void }) {
+  const fits = NODE_LIMITS.find((n) => n >= hit.count);
+  return (
+    <div className="limit-help">
+      {byLevel && <p>The view starts from a level, so every concept of that level in the chosen graphs is a starting concept.</p>}
+      {fits
+        ? <button type="button" onClick={() => onRaise(fits)}>Show up to {fits} nodes</button>
+        : <p>That is more than any view shows ({MAX_NODES}). {byLevel ? 'Pick starting concepts instead of a level, or choose fewer graphs.' : 'Choose fewer starting concepts or smaller groups.'}</p>}
+    </div>
   );
 }

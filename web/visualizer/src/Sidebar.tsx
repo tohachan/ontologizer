@@ -104,6 +104,13 @@ export function Sidebar(p: Props) {
                   onChange={(e) => set({ layout: { ...s.layout, direction: e.target.value as Selection['layout']['direction'] } })}>
             <option value="RIGHT">left to right</option><option value="LEFT">right to left</option>
             <option value="DOWN">top to bottom</option><option value="UP">bottom to top</option></select></label>
+          <label>Show up to <select value={s.layout.maxNodes} aria-label="node limit"
+                  onChange={(e) => set({ layout: { ...s.layout, maxNodes: Number(e.target.value) } })}>
+            {[...new Set([40, 80, 120, 160, 200, s.layout.maxNodes])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select> nodes and <select value={s.layout.maxEdges} aria-label="edge limit"
+                  onChange={(e) => set({ layout: { ...s.layout, maxEdges: Number(e.target.value) } })}>
+            {[...new Set([80, 160, 240, 320, 400, s.layout.maxEdges])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n}</option>)}
+          </select> edges</label>
           <label>Labels <select value={s.languages.join(',')} onChange={(e) => set({ languages: e.target.value.split(',') })} aria-label="languages">
             <option value="en,ru">English first</option><option value="ru,en">Russian first</option></select></label>
           <button type="button" className="primary" onClick={p.onCompile}
