@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ontologizer:schema:view-spec:1",
+  "title": "Ontologizer view specification, version 1",
+  "description": "What a view shows and how it groups it. No layout, no executable content. docs/visualizer.md, View specification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "title", "scope", "selection", "groups", "summaries", "annotations", "presentation"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "id": {"$ref": "#/$defs/id"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primaryGraphs", "contextGraphs"],
+      "properties": {
+        "primaryGraphs": {"type": "array", "items": {"$ref": "#/$defs/graphPath"}, "minItems": 1, "maxItems": 64, "uniqueItems": true},
+        "contextGraphs": {"type": "array", "items": {"$ref": "#/$defs/graphPath"}, "maxItems": 64, "uniqueItems": true}
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entities", "excludedEntities", "levels", "relationKinds", "relationTypeIris", "expansion"],
+      "properties": {
+        "entities": {"type": "array", "items": {"$ref": "#/$defs/iri"}, "maxItems": 500, "uniqueItems": true},
+        "excludedEntities": {"type": "array", "items": {"$ref": "#/$defs/iri"}, "maxItems": 2000, "uniqueItems": true},
+        "levels": {"type": "array", "items": {"$ref": "#/$defs/id"}, "maxItems": 16, "uniqueItems": true},
+        "relationKinds": {
+          "type": "array", "uniqueItems": true, "minItems": 1,
+          "items": {"enum": ["kit-relation", "kit-mapping", "class-inheritance", "rdf-assertion"]}
+        },
+        "relationTypeIris": {"type": "array", "items": {"$ref": "#/$defs/iri"}, "maxItems": 200, "uniqueItems": true},
+        "expansion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["hops", "direction"],
+          "properties": {
+            "hops": {"type": "integer", "minimum": 0, "maximum": 3},
+            "direction": {"enum": ["forward", "reverse", "both"]}
+          }
+        }
+      }
+    },
+    "groups": {
+      "type": "array", "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "members", "collapsed"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "title": {"type": "string", "minLength": 1, "maxLength": 200},
+          "members": {"type": "array", "items": {"$ref": "#/$defs/iri"}, "minItems": 1, "maxItems": 500, "uniqueItems": true},
+          "collapsed": {"type": "boolean"}
+        }
+      }
+    },
+    "summaries": {
+      "type": "array", "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "steps", "hideIntermediateEntities"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "steps": {
+            "type": "array", "minItems": 2, "maxItems": 6,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["relationshipId", "direction"],
+              "properties": {
+                "relationshipId": {"type": "string", "pattern": "^r-[0-9a-f]{20}$"},
+                "direction": {"enum": ["forward", "reverse"]}
+              }
+            }
+          },
+          "label": {"type": "string", "minLength": 1, "maxLength": 200},
+          "hideIntermediateEntities": {"type": "boolean"}
+        }
+      }
+    },
+    "annotations": {
+      "type": "array", "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "text", "target"],
+        "properties": {
+          "id": {"$ref": "#/$defs/id"},
+          "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "target": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "id"],
+            "properties": {
+              "kind": {"enum": ["entity", "group", "summary"]},
+              "id": {"type": "string", "minLength": 1, "maxLength": 2048}
+            }
+          }
+        }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["languages", "direction", "maxNodes", "maxEdges", "preset"],
+      "properties": {
+        "languages": {"type": "array", "items": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Za-z0-9]{1,8})*$"}, "minItems": 1, "maxItems": 8, "uniqueItems": true},
+        "direction": {"enum": ["RIGHT", "LEFT", "DOWN", "UP"]},
+        "maxNodes": {"type": "integer", "minimum": 1, "maximum": 200},
+        "maxEdges": {"type": "integer", "minimum": 0, "maximum": 400},
+        "preset": {"$ref": "#/$defs/id"}
+      }
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"},
+    "iri": {"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[^\\s<>\"{}|^`\\\\]+$"},
+    "graphPath": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.@-]*(/[A-Za-z0-9_][A-Za-z0-9_.@-]*)*$"}
+  }
+}

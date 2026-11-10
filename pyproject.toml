@@ -6,6 +6,7 @@ requires-python = ">=3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 dependencies = [
+    "jsonschema>=4.25",
     "pyoxigraph>=0.5.13",
     "pyshacl>=0.40.2",
     "pyyaml>=6.0.3",
