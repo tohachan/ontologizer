@@ -48,3 +48,13 @@ export const orderDetail = {
     evidence: [{ repo: null, path: 'doc.md', lines: '3', commit: null, kind: 'doc' }],
     statements: [{ graph: 'g', predicate: 'http://www.w3.org/2004/02/skos/core#prefLabel', object: { kind: 'literal', value: 'Заказ', language: 'ru' } }] }],
 };
+
+// a → b ← c: a path whose second step runs against its edge
+export function chain(): Compilation {
+  const c = compilation('chain');
+  c.diagram.nodes = ['a', 'b', 'c'].map((k, i) => node({ id: `entity:${k}`, label: k.toUpperCase(), members: [`urn:${k}`], hop: i }));
+  const e = (id: string, s: string, t: string) => ({ ...compilation('x').diagram.edges[0], id, source: `entity:${s}`, target: `entity:${t}`,
+    relationships: [`r-${s}${t}`], endpoints: [[`urn:${s}`, `urn:${t}`]] as [string, string][] });
+  c.diagram.edges = [e('edge:ab', 'a', 'b'), e('edge:cb', 'c', 'b')];
+  return c;
+}

@@ -48,9 +48,9 @@ describe('layout on the canvas', () => {
   it('applies the newest layout and drops a late older one', async () => {
     const calls: { g: ElkNode; done: (r: ElkNode) => void }[] = [];
     const engine = (g: ElkNode) => new Promise<ElkNode>((done) => calls.push({ g, done }));
-    const { rerender } = render(<ReactFlowProvider><Canvas compilation={compilation('c1')} selected={null} onSelect={() => {}} engine={engine} /></ReactFlowProvider>);
+    const { rerender } = render(<ReactFlowProvider><Canvas compilation={compilation('c1')} picked={[]} onPick={() => {}} engine={engine} /></ReactFlowProvider>);
     fireEvent.click(screen.getByText('Auto layout'));
-    rerender(<ReactFlowProvider><Canvas compilation={compilation('c2')} selected={null} onSelect={() => {}} engine={engine} /></ReactFlowProvider>);
+    rerender(<ReactFlowProvider><Canvas compilation={compilation('c2')} picked={[]} onPick={() => {}} engine={engine} /></ReactFlowProvider>);
     fireEvent.click(screen.getByText('Auto layout'));
     await act(async () => { calls[1].done(laidOut(calls[1].g, 1000)); });
     expect(transformOf('entity:order')).toContain('1000px');
@@ -61,7 +61,7 @@ describe('layout on the canvas', () => {
   it('a failed layout leaves the cards and offers a retry', async () => {
     let fail = true;
     const engine = (g: ElkNode) => (fail ? Promise.reject(new Error('x')) : Promise.resolve(laidOut(g, 700)));
-    render(<ReactFlowProvider><Canvas compilation={compilation('c1')} selected={null} onSelect={() => {}} engine={engine} /></ReactFlowProvider>);
+    render(<ReactFlowProvider><Canvas compilation={compilation('c1')} picked={[]} onPick={() => {}} engine={engine} /></ReactFlowProvider>);
     const before = transformOf('entity:order');
     await act(async () => { fireEvent.click(screen.getByText('Auto layout')); });
     expect((await screen.findByRole('alert')).textContent).toContain('Layout failed');

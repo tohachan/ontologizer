@@ -15,13 +15,13 @@ import type { Compilation, DNode, ViewSpec } from './types';
 
 import type { Pos } from './placement';
 type Props = {
-  compilation: Compilation; selected: string | null; onSelect: (id: string | null) => void;
+  compilation: Compilation; picked: string[]; onPick: (id: string | null, additive: boolean) => void;
   direction?: ViewSpec['presentation']['direction'];
   engine?: ConstructorParameters<typeof LayoutRunner>[0];
 };
 const AREA_PAD = { top: 40, side: 16, bottom: 16 };
 
-export function Canvas({ compilation, selected, onSelect, direction = 'RIGHT', engine = defaultEngine }: Props) {
+export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engine = defaultEngine }: Props) {
   const flow = useReactFlow();
   const measured = useNodesInitialized();
   const positions = useRef(new Map<string, Pos>());       // by visual ID, relative to the parent area
@@ -92,20 +92,20 @@ export function Canvas({ compilation, selected, onSelect, direction = 'RIGHT', e
         const ks = kids.get(n.id) ?? [];
         const w = Math.max(CARD.width, ...ks.map((k) => pos(k).x + CARD.width)) + AREA_PAD.side;
         const h = Math.max(CARD.height, ...ks.map((k) => pos(k).y + CARD.height)) + AREA_PAD.bottom;
-        return { id: n.id, type: 'area', position: pos(n), data: { node: n }, selectable: false, style: { width: w, height: h } };
+        return { id: n.id, type: 'area', position: pos(n), data: { node: n }, selected: picked.includes(n.id), style: { width: w, height: h } };
       }
       if (n.kind === 'annotation') {
         const t = n.attachedTo ? abs(n.attachedTo) : { x: 0, y: 0 };
-        return { id: n.id, type: 'annotation', position: { x: t.x + CARD.width + 16, y: t.y - 44 }, data: { node: n }, draggable: false };
+        return { id: n.id, type: 'annotation', position: { x: t.x + CARD.width + 16, y: t.y - 44 }, data: { node: n }, draggable: false, selected: picked.includes(n.id) };
       }
       return {
-        id: n.id, type: n.kind, position: pos(n), data: { node: n }, selected: n.id === selected,
+        id: n.id, type: n.kind, position: pos(n), data: { node: n }, selected: picked.includes(n.id),
         className: fresh.current.has(n.id) ? 'fresh' : pinned.current.has(n.id) ? 'pinned' : undefined,
         ...(n.parent ? { parentId: n.parent, extent: 'parent' as const } : {}),
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, selected, version]);
+  }, [d, picked, version]);
 
   const [nodes, setNodes] = useState<Node[]>(derived);
   useEffect(() => setNodes(derived), [derived]);
@@ -114,7 +114,7 @@ export function Canvas({ compilation, selected, onSelect, direction = 'RIGHT', e
   const edges = useMemo((): Edge[] => {
     const out: Edge[] = d.edges.map((e) => ({
       id: e.id, source: e.source, target: e.target, type: 'routed', className: `edge ${e.kind} ${e.origin}`,
-      selected: e.id === selected, markerEnd: { type: MarkerType.ArrowClosed },
+      selected: picked.includes(e.id), markerEnd: { type: MarkerType.ArrowClosed },
       data: { points: routes.current.get(e.id), text: edgeText(e.kind, e.type, e.label) },
       style: e.origin === 'summary' ? { strokeDasharray: '6 4' } : e.kind === 'kit-mapping' ? { strokeDasharray: '2 3' } : undefined,
     }));
@@ -125,7 +125,7 @@ export function Canvas({ compilation, selected, onSelect, direction = 'RIGHT', e
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, selected, version]);
+  }, [d, picked, version]);
 
   const onDragStop = useCallback((_: unknown, n: Node) => {
     positions.current.set(n.id, n.position);
@@ -139,9 +139,10 @@ export function Canvas({ compilation, selected, onSelect, direction = 'RIGHT', e
   return (
     <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={onNodesChange}
                onNodeDragStop={onDragStop} fitView minZoom={0.1} nodesConnectable={false}
-               onNodeClick={(_, n) => onSelect(n.type === 'area' ? null : n.id)}
-               onEdgeClick={(_, e) => onSelect(e.id.startsWith('note-link:') ? null : e.id)}
-               onPaneClick={() => onSelect(null)}>
+               multiSelectionKeyCode={null} selectionKeyCode={null}
+               onNodeClick={(ev, n) => onPick(n.id, ev.shiftKey || ev.ctrlKey || ev.metaKey)}
+               onEdgeClick={(ev, e) => onPick(e.id.startsWith('note-link:') ? null : e.id, ev.shiftKey || ev.ctrlKey || ev.metaKey)}
+               onPaneClick={() => onPick(null, false)}>
       <Background />
       <Controls showInteractive={false} />
       <Panel position="top-right" className="layout-panel">

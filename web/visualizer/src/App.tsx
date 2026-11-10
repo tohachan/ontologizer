@@ -1,9 +1,11 @@
 import { ReactFlowProvider } from '@xyflow/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Actions, type Action } from './Actions';
 import { api, ApiFailure } from './api';
 import { Canvas } from './Canvas';
 import { Inspector } from './Inspector';
 import { Sidebar, type Selection } from './Sidebar';
+import * as ops from './ops';
 import { buildSpec, scopeKey } from './spec';
 import type { Catalog, Compilation, OwnerCatalog, SearchHit } from './types';
 
@@ -33,7 +35,9 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [extra, setExtra] = useState<ops.Extra>(ops.EMPTY);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [focus, setFocus] = useState<string | null>(null);   // the element the inspector shows
   const snapshot = useRef<{ key: string; id: string } | null>(null);
   const request = useRef(0);
 
@@ -41,7 +45,8 @@ export function App() {
 
   const chooseOwner = useCallback((o: string) => {
     request.current++;                                       // an answer still on its way belongs to the old view
-    setOwner(o); setOwnerCat(null); setHits([]); setCompilation(null); setSelected(null); setBusy(false);
+    setOwner(o); setOwnerCat(null); setHits([]); setCompilation(null); setPicked([]); setFocus(null); setBusy(false);
+    setExtra(ops.EMPTY);
     snapshot.current = null;
     api.ownerCatalog(o).then((c) => {
       setOwnerCat(c);
@@ -74,9 +79,9 @@ export function App() {
     }
   }, [owner, sel]);
 
-  const compile = useCallback(async () => {
-    if (!owner) return;
-    const spec = buildSpec(sel);
+  const compileWith = useCallback(async (s: Selection, x: ops.Extra): Promise<boolean> => {
+    if (!owner) return false;
+    const spec = buildSpec(s, x);
     const key = scopeKey(spec.scope);
     const mine = ++request.current;
     setBusy(true); setError(null); setNotice(null);
@@ -89,15 +94,57 @@ export function App() {
         c = await api.compile(owner, spec);
         setNotice('The source was read again: the earlier snapshot had expired.');
       }
-      if (mine !== request.current) return;                    // a newer request owns the canvas
+      if (mine !== request.current) return false;              // a newer request owns the canvas
       snapshot.current = { key, id: c.snapshotId };
-      setCompilation(c); setSelected(null);
+      setCompilation(c);
+      setPicked((ps) => ps.filter((id) => c.diagram.nodes.some((n) => n.id === id) || c.diagram.edges.some((e) => e.id === id)));
+      setFocus((f) => (f && (c.diagram.nodes.some((n) => n.id === f) || c.diagram.edges.some((e) => e.id === f)) ? f : null));
+      return true;
     } catch (e) {
       if (mine === request.current) setError(describe(e));     // the last valid diagram stays
+      return false;
     } finally {
       if (mine === request.current) setBusy(false);
     }
-  }, [owner, sel]);
+  }, [owner]);
+
+  const compile = useCallback(() => { void compileWith(sel, extra); }, [compileWith, sel, extra]);
+
+  // A view operation changes the spec and shows the result at once; if that view does not compile,
+  // the spec goes back to what it was and the last diagram stays.
+  const apply = useCallback(async (s: Selection, x: ops.Extra) => {
+    const before = { s: sel, x: extra };
+    setSel(s); setExtra(x);
+    if (!(await compileWith(s, x))) { setSel(before.s); setExtra(before.x); }
+  }, [compileWith, sel, extra]);
+
+  const onAction = useCallback((a: Action) => {
+    if (!compilation) return;
+    const nodes = compilation.diagram.nodes;
+    switch (a.kind) {
+      case 'group': return void apply(sel, ops.group(extra, ops.entitiesOf(picked, nodes), a.title));
+      case 'hide': return void apply({ ...sel, ...ops.hide(sel, ops.entitiesOf(picked, nodes)) }, extra);
+      case 'collapse': return void apply(sel, ops.setCollapsed(extra, a.group, a.collapsed));
+      case 'rename': return void apply(sel, ops.rename(extra, a.group, a.title));
+      case 'ungroup': return void apply(sel, ops.ungroup(extra, a.group));
+      case 'summarize': {
+        const steps = ops.findPath(compilation, picked[0], picked[1]);
+        return steps ? void apply(sel, ops.summarize(extra, steps, a.hide)) : undefined;
+      }
+      case 'note': return void apply(sel, ops.annotate(extra, compilation, picked[0], a.text));
+      case 'remove-summary': return void apply(sel, ops.removeSummary(extra, a.id));
+      case 'remove-note': return void apply(sel, ops.removeAnnotation(extra, a.id));
+    }
+  }, [apply, compilation, extra, picked, sel]);
+
+  const onPick = useCallback((id: string | null, additive: boolean) => {
+    if (!id) { setPicked([]); setFocus(null); return; }
+    setPicked((ps) => (additive ? (ps.includes(id) ? ps.filter((p) => p !== id) : [...ps, id]) : [id]));
+    setFocus(id.startsWith('note:') ? null : id);
+  }, []);
+
+  const unhide = useCallback((iri: string) => void apply({ ...sel, excluded: sel.excluded.filter((e) => e !== iri) }, extra),
+    [apply, sel, extra]);
 
   const counts = compilation?.diagram.counts;
   return (
@@ -119,13 +166,16 @@ export function App() {
       <main>
         <Sidebar owners={catalog?.owners ?? []} owner={owner} onOwner={chooseOwner} graphs={ownerCat?.graphs ?? []}
                  levels={ownerCat?.levels ?? []} sel={sel} onChange={setSel} onSearch={search} hits={hits}
-                 searching={searching} onCompile={compile} busy={busy} />
+                 searching={searching} onCompile={compile} busy={busy} onUnhide={unhide} />
         <section className="canvas" aria-label="diagram">
           {compilation
-            ? <ReactFlowProvider><Canvas compilation={compilation} selected={selected} onSelect={setSelected} /></ReactFlowProvider>
+            ? <ReactFlowProvider>
+                <Actions compilation={compilation} picked={picked} onAction={onAction} busy={busy} />
+                <Canvas compilation={compilation} picked={picked} onPick={onPick} />
+              </ReactFlowProvider>
             : <p className="muted placeholder">{owner ? 'Choose graphs and starting concepts, then show the diagram.' : 'Choose an owner.'}</p>}
         </section>
-        {compilation && <Inspector compileId={compilation.compileId} elementId={selected} />}
+        {compilation && <Inspector compileId={compilation.compileId} elementId={focus} />}
       </main>
     </div>
   );

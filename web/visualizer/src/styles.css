@@ -37,3 +37,7 @@ button.primary { background: var(--accent); color: #fff; border: 0; padding: 8px
 .react-flow__node.fresh .card { box-shadow: 0 0 0 3px #f0c419; }
 .react-flow__node.fresh .card::after { content: 'new'; font-size: 10px; float: right; }
 .react-flow__node.pinned .card::before { content: '📌 '; font-size: 10px; }
+.actions { position: absolute; z-index: 5; top: 8px; left: 8px; right: 180px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+           background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font-size: 13px; }
+.ask { display: inline-flex; gap: 4px; }
+.area.selected, .note.selected { outline: 3px solid var(--accent); }

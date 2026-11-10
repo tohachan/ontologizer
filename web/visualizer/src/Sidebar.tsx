@@ -16,7 +16,7 @@ type Props = {
   owners: { name: string; available: boolean }[]; owner: string | null; onOwner: (o: string) => void;
   graphs: GraphEntry[]; levels: string[]; sel: Selection; onChange: (s: Selection) => void;
   onSearch: (q: string) => void; hits: SearchHit[]; searching: boolean;
-  onCompile: () => void; busy: boolean;
+  onCompile: () => void; busy: boolean; onUnhide: (iri: string) => void;
 };
 
 function toggle<T>(list: T[], v: T): T[] {
@@ -73,6 +73,14 @@ export function Sidebar(p: Props) {
                 onClick={() => set({ seeds: s.seeds.filter((y) => y.iri !== x.iri) })}>×</button></span>
             ))}
           </fieldset>
+          {s.excluded.length > 0 && (
+            <fieldset><legend>Hidden</legend>
+              {s.excluded.map((iri) => (
+                <span key={iri} className="chip" title={iri}>{iri.split(/[#/:]/).pop()} <button type="button"
+                  aria-label={`show ${iri}`} onClick={() => p.onUnhide(iri)}>show</button></span>
+              ))}
+            </fieldset>
+          )}
           <fieldset><legend>Levels</legend>
             {p.levels.map((lv) => (
               <label key={lv} className="row"><input type="checkbox" checked={s.levels.includes(lv)}

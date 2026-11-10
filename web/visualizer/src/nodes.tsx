@@ -47,12 +47,17 @@ export function AggregateCard({ data, selected }: Props) {
   );
 }
 
-export function AreaNode({ data }: Props) {
-  return <div className="area" aria-label={`area ${data.node.label}`}><div className="area-title">{data.node.label}</div></div>;
+export function AreaNode({ data, selected }: Props) {
+  return (
+    <div className={`area${selected ? ' selected' : ''}`} aria-label={`area ${data.node.label}`}>
+      <Ports />
+      <div className="area-title">{data.node.label}</div>
+    </div>
+  );
 }
 
-export function NoteNode({ data }: Props) {
-  return <div className="note" aria-label="annotation">✎ {data.node.label}</div>;
+export function NoteNode({ data, selected }: Props) {
+  return <div className={`note${selected ? ' selected' : ''}`} aria-label="annotation">✎ {data.node.label}</div>;
 }
 
 export const nodeTypes = { concept: ConceptCard, aggregate: AggregateCard, area: AreaNode, annotation: NoteNode };
