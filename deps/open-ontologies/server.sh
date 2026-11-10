@@ -79,7 +79,7 @@ compose() {
   OPEN_ONTOLOGIES_HOST_PORT=$port \
   OO_SRC=$src \
   OO_DOCKERFILE=$here/Dockerfile.service \
-    docker compose -f "$here/compose.yaml" -f "$here/compose.localhost.yaml" "$@"
+    COMPOSE_IGNORE_ORPHANS=1 docker compose -f "$here/compose.yaml" -f "$here/compose.localhost.yaml" "$@"
 }
 
 # --- steps -------------------------------------------------------------------
@@ -139,6 +139,18 @@ ensure_container_here() {
   need_docker
   if healthy && [ -z "$(compose ps -a -q engine 2>/dev/null)" ]; then
     die "the server at $OO_URL has no container on this Docker daemon; run this where the server runs"
+  fi
+}
+
+# The visualizer (deps/visualizer) shares this project's network; the network cannot be removed
+# while its container is attached.
+stop_visualizer() {
+  local c
+  c=$(docker ps -aq --filter label=com.docker.compose.project=open-ontologies \
+        --filter label=com.docker.compose.service=visualizer)
+  if [ -n "$c" ]; then
+    say "stopping the visualizer first (make viz-up starts it again)"
+    docker rm -f $c >/dev/null
   fi
 }
 
@@ -204,7 +216,7 @@ case "$cmd" in
   up)      cmd_up ;;
   clone)   ensure_clone ;;
   rebuild) cmd_rebuild ;;
-  down)    ensure_container_here; compose down ;;
+  down)    ensure_container_here; stop_visualizer; compose down ;;
   logs)    need_docker; compose logs --tail=200 "$@" engine ;;
   *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; [ -z "$cmd" ] || exit 2 ;;
 esac

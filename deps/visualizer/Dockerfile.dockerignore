@@ -1,0 +1,14 @@
+# Allow list: the build context is the kit checkout, which holds .env, var/ and the engine clone.
+*
+!pyproject.toml
+!uv.lock
+!LICENSE
+!NOTICE
+!ontologizer.yaml
+!src/
+!kit/
+!presets/
+!vendor/
+!schemas/
+**/__pycache__
+**/*.pyc

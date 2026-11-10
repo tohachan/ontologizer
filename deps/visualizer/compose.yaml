@@ -1,0 +1,26 @@
+# The visualizer, in the engine's compose project so that both share one network and the
+# visualizer reaches the engine as `engine`. This file names only the visualizer: no command
+# run with it can recreate or remove the engine's container or its volume.
+# Run it through `make viz-up` (deps/visualizer/viz.sh), which generates the mounts and the
+# registry (compose.mounts.yaml, ontologizer.local.yaml under the main checkout's var/visualizer/).
+name: open-ontologies
+
+services:
+  visualizer:
+    image: ontologizer-visualizer:local
+    build:
+      context: ${VIZ_CONTEXT:-.}
+      dockerfile: deps/visualizer/Dockerfile
+    user: "${VIZ_UID:-10001}:${VIZ_GID:-10001}"
+    environment:
+      OPEN_ONTOLOGIES_TOKEN: ${OPEN_ONTOLOGIES_TOKEN:-}
+      VISUALIZER_ALLOWED_HOSTS: "127.0.0.1:${VIZ_PORT:-8090},localhost:${VIZ_PORT:-8090}"
+    ports:
+      - "127.0.0.1:${VIZ_PORT:-8090}:8090"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

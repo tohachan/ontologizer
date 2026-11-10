@@ -419,7 +419,7 @@ Natural language tests must include Russian requests against English labels. The
 
 The visualizer runs as its own small service, beside the engine and not inside it, so that a rebuild of either leaves the other alone.
 
-- **Compose.** An overlay in the `open-ontologies` compose project adds a `visualizer` service under the `visualizer` profile. It publishes on `127.0.0.1` only (port 8090 unless configured). It declares no `depends_on` and is started with `--no-deps`, so starting it never recreates the engine's container. `make viz-up`, `viz-down`, `viz-status`, and `viz-logs` drive it. Because the engine and the visualizer share a compose network, stopping the engine has to stop the visualizer first; `oo-down` does that. No target uses `down -v`.
+- **Compose.** `deps/visualizer/compose.yaml` adds a `visualizer` service to the `open-ontologies` compose project. It is a file of its own, which names only the visualizer, so no command run with it can recreate or remove the engine's container or its volume. It publishes on `127.0.0.1` only (port 8090 unless configured). It declares no `depends_on` and is started with `--no-deps`. `make viz-up`, `viz-down`, `viz-status`, and `viz-logs` drive it (`deps/visualizer/README.md`). Because the engine and the visualizer share a compose network, stopping the engine has to stop the visualizer first; `oo-down` does that. No target uses `down -v`.
 - **Image.** `deps/visualizer/Dockerfile` builds in stages: Node builds the bundle, then Python 3.14 serves it and the API, with base images pinned by digest and locked dependencies. The kit is installed from a source tree, because `open_ontologies.py` and the config locate the kit's files relative to it. The image holds no secret: the engine token arrives only through the environment, from `scripts/oo`.
 - **Configuration.** The image is the hub (`ONTOLOGIZER_HUB`), which is what lets an owner's `hub:` path written for the host be ignored inside the container. `viz-up` generates, from the host's registry, a compose file with the mounts and an `ontologizer.local.yaml` with `projects:` and `store.url`. `store.url` is needed because it beats `OPEN_ONTOLOGIES_URL` and the hub's value is `127.0.0.1`, which inside a container is the container itself. The address is `http://engine:8080` on the host, or `http://host.docker.internal:8080` for a test container on a VM's own daemon.
 - **Files.** Each owner is mounted read-only at `/owners/<name>`, and only its views directory is read-write. The process runs as the host user's UID and GID, so a saved view belongs to that user.
@@ -429,7 +429,7 @@ Development may happen in a git worktree, in a VM with its own Docker daemon, or
 
 - Every command works the same from the host, from the main checkout, and from a worktree, or refuses with a message naming where to run it. `make viz-*` and the Python entry points find the checkout, `.env`, and the owner registry the way the kit already does.
 - No path of a worktree or a VM is written into a committed file, a generated file that outlives the command, a saved view, or an image.
-- Whatever differs is listed in one table in the README: which command runs where, and what address the browser and the service use in each place.
+- Whatever differs is listed in one table in `deps/visualizer/README.md`: which command runs where, and what address the browser and the service use in each place.
 
 From a VM a test can use its own daemon, reading from the real engine. Acceptance runs `make viz-up` on the host, from the main checkout.
 
