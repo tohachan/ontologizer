@@ -11,25 +11,27 @@ import { CARD, place } from './layout';
 import { cardsOf, carryOver } from './placement';
 import { defaultEngine, LayoutRunner } from './layoutRunner';
 import { nodeTypes } from './nodes';
-import type { Compilation, DNode, ViewSpec } from './types';
+import type { Compilation, DNode, Layout, ViewSpec } from './types';
 
 import type { Pos } from './placement';
 type Props = {
   compilation: Compilation; picked: string[]; onPick: (id: string | null, additive: boolean) => void;
   direction?: ViewSpec['presentation']['direction'];
   engine?: ConstructorParameters<typeof LayoutRunner>[0];
+  initialLayout?: Layout | null;                         // a saved view's positions, applied once
+  layoutRef?: { current: (() => Layout) | null };       // how the app reads the layout to save it
 };
 const AREA_PAD = { top: 40, side: 16, bottom: 16 };
 
-export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engine = defaultEngine }: Props) {
+export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engine = defaultEngine, initialLayout, layoutRef }: Props) {
   const flow = useReactFlow();
   const measured = useNodesInitialized();
-  const positions = useRef(new Map<string, Pos>());       // by visual ID, relative to the parent area
+  const positions = useRef(new Map<string, Pos>(Object.entries(initialLayout?.positions ?? {})));   // by visual ID, relative to the parent area
   const routes = useRef(new Map<string, ElkPoint[]>());
-  const pinned = useRef(new Set<string>());
+  const pinned = useRef(new Set<string>(initialLayout?.pinned ?? []));
   const cards = useRef(new Map<string, string>());         // entity IRI -> the card that showed it last
   const fresh = useRef(new Set<string>());
-  const pendingFull = useRef(true);
+  const pendingFull = useRef(!initialLayout || Object.keys(initialLayout.positions).length === 0);   // a saved view keeps its layout
   const runner = useRef(new LayoutRunner(engine));
   const [version, setVersion] = useState(0);
   const [status, setStatus] = useState<'idle' | 'running' | 'failed'>('idle');
@@ -68,7 +70,24 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
     }
   }, [d, direction, flow]);
 
-  useEffect(() => { setStatus('idle'); setConfirm(false); }, [d]);   // a cancelled layout leaves nothing running
+  useEffect(() => { setStatus('idle'); setConfirm(false); }, [d]);
+
+  useEffect(() => {
+    if (!layoutRef) return;
+    layoutRef.current = () => ({
+      // what is on screen, plus the remembered places of members hidden in collapsed groups
+      positions: Object.fromEntries([...positions.current, ...flow.getNodes().map((n) => [n.id, { x: n.position.x, y: n.position.y }] as const)]
+        .filter(([id]) => !id.startsWith('note:'))),
+      pinned: [...pinned.current].filter((id) => positions.current.has(id)).sort(),
+      viewport: flow.getViewport ? flow.getViewport() : null, engine: 'elkjs-0.12.0/layered',
+    });
+    return () => { layoutRef.current = null; };
+  }, [layoutRef, flow]);
+
+  useEffect(() => {
+    if (initialLayout?.viewport && flow.setViewport) requestAnimationFrame(() => flow.setViewport(initialLayout.viewport!));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);   // a cancelled layout leaves nothing running
 
   useEffect(() => {
     if (measured && pendingFull.current) { pendingFull.current = false; void runFull(); }

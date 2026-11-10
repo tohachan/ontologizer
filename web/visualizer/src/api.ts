@@ -1,6 +1,6 @@
 // Same-origin client of the visualizer API. Every failure is an ApiFailure: a failed call never
 // looks like an empty result.
-import type { Catalog, Compilation, ElementDetail, OwnerCatalog, SearchHit, ViewSpec } from './types';
+import type { Artifact, Catalog, Compilation, ElementDetail, Layout, OwnerCatalog, SavedView, SearchHit, ViewSpec } from './types';
 
 const BASE = '/visualizer/api';
 
@@ -10,11 +10,11 @@ export class ApiFailure extends Error {
   }
 }
 
-async function call<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+async function call<T>(path: string, body?: unknown, signal?: AbortSignal, method = 'POST'): Promise<T> {
   let res: Response;
   try {
     res = await fetch(BASE + path, body === undefined ? { signal } : {
-      method: 'POST', signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      method, signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
   } catch (e) {
     if ((e as Error).name === 'AbortError') throw e;
@@ -40,9 +40,13 @@ export const api = {
   search: (owner: string, scope: ViewSpec['scope'], query: string, languages: string[], snapshotId?: string) =>
     call<{ snapshotId: string; results: SearchHit[]; total: number }>('/search',
       { owner, scope, query, languages, limit: 20, ...(snapshotId ? { snapshotId } : {}) }),
-  compile: (owner: string, spec: ViewSpec, snapshotId?: string, mode: 'strict' | 'tolerant' = 'strict',
-            signal?: AbortSignal) =>
-    call<Compilation>('/compile', { owner, spec, mode, ...(snapshotId ? { snapshotId } : {}) }, signal),
+  compile: (owner: string, spec: ViewSpec, opts: { snapshotId?: string; mode?: 'strict' | 'tolerant'; compareTo?: string } = {}) =>
+    call<Compilation>('/compile', { owner, spec, mode: opts.mode ?? 'strict',
+      ...(opts.snapshotId ? { snapshotId: opts.snapshotId } : {}), ...(opts.compareTo ? { compareTo: opts.compareTo } : {}) }),
+  views: (owner: string) => call<{ views: SavedView[] }>(`/views?owner=${encodeURIComponent(owner)}`),
+  view: (owner: string, id: string) => call<Artifact>(`/views/${encodeURIComponent(id)}?owner=${encodeURIComponent(owner)}`),
+  save: (owner: string, id: string, compileId: string, layout: Layout, expectedRevision: number | null) =>
+    call<{ id: string; revision: number }>(`/views/${encodeURIComponent(id)}`, { owner, compileId, layout, expectedRevision }, undefined, 'PUT'),
   element: (compileId: string, elementId: string) =>
     call<ElementDetail>(`/compilations/${encodeURIComponent(compileId)}/elements/${encodeURIComponent(elementId)}`),
 };

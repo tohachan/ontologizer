@@ -1,0 +1,107 @@
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { App } from '../App';
+import type { Artifact, Compilation } from '../types';
+import { catalog, compilation, ownerCatalog, search } from './fixtures';
+
+type Req = { method: string; path: string; body: Record<string, unknown> | undefined };
+let reqs: Req[];
+let stored: Artifact | null;
+let revision: number;
+let conflict: boolean;
+let changes: Compilation['changes'];
+
+beforeEach(() => {
+  reqs = []; stored = null; revision = 0; conflict = false; changes = null;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET';
+    const path = decodeURIComponent(url.replace('/visualizer/api', ''));
+    const body = init?.body ? JSON.parse(init.body as string) : undefined;
+    reqs.push({ method, path, body });
+    const ok = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
+    if (path === '/catalog') return ok(catalog);
+    if (path === '/catalog?owner=study') return ok(ownerCatalog);
+    if (path === '/search') return ok(search);
+    if (path === '/views?owner=study') return ok({ owner: 'study', views: stored ? [{ id: stored.spec.id, title: stored.spec.title, revision }] : [] });
+    if (path.startsWith('/views/') && method === 'GET') return ok(stored);
+    if (path.startsWith('/views/') && method === 'PUT') {
+      if (conflict || body.expectedRevision !== (revision || null)) return ok({ error: { code: 'save-conflict', message: 'x', details: { currentRevision: revision + 1 }, requestId: 'x' } }, 409);
+      revision += 1;
+      return ok({ id: path.slice(7), revision });
+    }
+    if (path === '/compile') return ok({ ...compilation('c' + reqs.length), changes });
+    return ok({ error: { code: 'not-found', message: path, details: null, requestId: 'x' } }, 404);
+  }));
+});
+
+async function diagram() {
+  render(<App />);
+  fireEvent.change(await screen.findByLabelText('owner'), { target: { value: 'study' } });
+  fireEvent.click(await screen.findByLabelText(/shared\/domain/));
+  fireEvent.change(screen.getByLabelText('search'), { target: { value: 'ord' } });
+  fireEvent.click(screen.getByText('Search'));
+  fireEvent.click(await screen.findByText('+ Order'));
+  fireEvent.click(screen.getByText('Show diagram'));
+  await screen.findByLabelText('concept Order');
+}
+
+it('saves a new view, then its changes with the revision it saw, then reports a conflict', async () => {
+  await diagram();
+  fireEvent.change(screen.getByLabelText('view title'), { target: { value: 'Order flow' } });
+  fireEvent.click(screen.getByText('Save'));
+  await screen.findByText(/Saved as “Order flow” \(revision 1\)/);
+  const put = reqs.find((r) => r.method === 'PUT')!;
+  expect(put.path).toBe('/views/Order-flow');
+  expect(put.body!.expectedRevision).toBeNull();
+  expect(Object.keys((put.body!.layout as { positions: object }).positions).length).toBeGreaterThan(0);
+  const compiled = reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec as { id: string; title: string };
+  expect(compiled).toMatchObject({ id: 'Order-flow', title: 'Order flow' });
+  fireEvent.click(screen.getByText('Save changes'));
+  await screen.findByText(/revision 2/);
+  expect(reqs.filter((r) => r.method === 'PUT').at(-1)!.body!.expectedRevision).toBe(1);
+  conflict = true;
+  fireEvent.click(screen.getByText('Save changes'));
+  await waitFor(() => expect(screen.getAllByRole('alert').some((a) => a.textContent?.includes('saved elsewhere'))).toBe(true));
+  expect(reqs.filter((r) => !['GET', 'POST', 'PUT'].includes(r.method))).toEqual([]);
+});
+
+it('opens a saved view: reads the source again, compiles tolerantly, shows what changed and keeps its layout', async () => {
+  await diagram();
+  stored = {
+    artifactVersion: 1, revision: 3, layout: { positions: { 'entity:order': { x: 777, y: 55 } }, pinned: ['entity:order'], viewport: null, engine: 'elk' },
+    manifest: compilation('x').manifest, baseline: {},
+    spec: { schemaVersion: 1, id: 'saved', title: 'Saved one', scope: { primaryGraphs: ['shared/domain'], contextGraphs: ['upper/gufo'] },
+      selection: { entities: ['urn:sample:Order'], excludedEntities: [], levels: [], relationKinds: ['kit-relation'], relationTypeIris: [],
+                   expansion: { hops: 2, direction: 'both' } },
+      groups: [], summaries: [], annotations: [], presentation: { languages: ['en'], direction: 'RIGHT', maxNodes: 80, maxEdges: 160, preset: 'domain' } },
+  };
+  revision = 3;
+  changes = { addedEntities: ['urn:sample:New'], removedEntities: ['urn:sample:Item'], notShownEntities: [], changedLabels: ['urn:sample:Order'],
+              changedStatus: [], addedRelationships: [], removedRelationships: [], notShownRelationships: [], changedGraphs: ['shared/domain'] };
+  fireEvent.change(screen.getByLabelText('owner'), { target: { value: 'study' } });             // reloads the list
+  fireEvent.click(await within(await screen.findByLabelText('saved views')).findByText('Saved one'));
+  const banner = await screen.findByLabelText('changes since saved');
+  expect(banner.textContent).toContain('1 new');
+  expect(banner.textContent).toContain('1 gone from the source');
+  expect(banner.textContent).toContain('Gone: Item (not replaced)');
+  expect(banner.textContent).toContain('Changed graphs: shared/domain');
+  const sent = reqs.filter((r) => r.path === '/compile').at(-1)!.body!;
+  expect(sent).toMatchObject({ mode: 'tolerant', compareTo: 'saved' });
+  expect(sent.snapshotId).toBeUndefined();                                                   // a fresh read
+  expect((document.querySelector('.react-flow__node[data-id="entity:order"]') as HTMLElement).style.transform).toContain('777px');
+  expect(screen.getByText(/Saved one \(rev 3\)/)).toBeTruthy();
+});
+
+it('opens a JSON file as an unsaved view', async () => {
+  await diagram();
+  const a = { artifactVersion: 1, revision: 9, layout: { positions: {}, pinned: [], viewport: null, engine: '' }, manifest: {}, baseline: {},
+    spec: { ...JSON.parse(JSON.stringify(reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec)), id: 'from-file', title: 'From a file' } };
+  const input = screen.getByLabelText('view file') as HTMLInputElement;
+  const file = new File([JSON.stringify(a)], 'v.view.json', { type: 'application/json' });
+  Object.defineProperty(file, 'text', { value: () => Promise.resolve(JSON.stringify(a)) });
+  fireEvent.change(input, { target: { files: [file] } });
+  await screen.findByText(/From a file \(not saved\)/);
+  const sent = reqs.filter((r) => r.path === '/compile').at(-1)!.body!;
+  expect(sent.mode).toBe('tolerant');
+  expect(sent.compareTo).toBeUndefined();
+});

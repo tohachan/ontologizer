@@ -41,3 +41,4 @@ button.primary { background: var(--accent); color: #fff; border: 0; padding: 8px
            background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font-size: 13px; }
 .ask { display: inline-flex; gap: 4px; }
 .area.selected, .note.selected { outline: 3px solid var(--accent); }
+.savebar { margin-left: auto; display: flex; gap: 6px; }

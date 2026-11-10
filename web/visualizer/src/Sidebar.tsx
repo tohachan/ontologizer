@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { GraphEntry, RelationKind, SearchHit } from './types';
 
 export type Selection = {
@@ -16,7 +16,7 @@ type Props = {
   owners: { name: string; available: boolean }[]; owner: string | null; onOwner: (o: string) => void;
   graphs: GraphEntry[]; levels: string[]; sel: Selection; onChange: (s: Selection) => void;
   onSearch: (q: string) => void; hits: SearchHit[]; searching: boolean;
-  onCompile: () => void; busy: boolean; onUnhide: (iri: string) => void;
+  onCompile: () => void; busy: boolean; onUnhide: (iri: string) => void; children?: ReactNode;
 };
 
 function toggle<T>(list: T[], v: T): T[] {
@@ -38,6 +38,7 @@ export function Sidebar(p: Props) {
           {p.owners.map((o) => <option key={o.name} value={o.name} disabled={!o.available}>{o.name}{o.available ? '' : ' (not available)'}</option>)}
         </select>
       </label>
+      {p.children}
       {p.owner && (
         <>
           <fieldset><legend>Graphs of this owner</legend>

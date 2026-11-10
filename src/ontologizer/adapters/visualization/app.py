@@ -28,6 +28,7 @@ from ontologizer.core.views.reader import choose_label, read_model
 from ontologizer.core.views.scope import OutOfScope, Owners, Scope, UnknownOwner, catalog, resolve
 from ontologizer.core.views.source import ScopedReader, ScopeTooLarge, Snapshot
 from ontologizer.core.views.spec import SpecError, ViewSpec, check, parse
+from ontologizer.core.views.storage import StorageError, ViewStore, baseline, diff, spec_of
 from ontologizer.ports.engine import EngineError, EngineUnavailable
 
 API = "/visualizer/api"
@@ -93,6 +94,7 @@ class _Compilation:
     model: object
     diagram: DiagramModel
     owner: str
+    manifest: dict
 
 
 @dataclass
@@ -171,9 +173,15 @@ class Visualizer:
                 return 200, self.compile(payload)
             case ("GET", ["compilations", cid, "elements", eid]):
                 return 200, self.element(cid, eid)
+            case ("GET", ["views"]):
+                return 200, self.views(query.get("owner"))
+            case ("GET", ["views", vid]):
+                return 200, self.view(query.get("owner"), vid)
+            case ("PUT", ["views", vid]):
+                return 200, self.save(vid, payload)
             case ("POST", ["plan"]):
                 raise ApiError(501, "planner-disabled", "natural-language planning is turned off in this service")
-            case (_, ["health"] | ["catalog"] | ["search"] | ["compile"] | ["plan"]):
+            case (_, ["health"] | ["catalog"] | ["search"] | ["compile"] | ["plan"] | ["views"] | ["views", _]):
                 raise ApiError(405, "method-not-allowed", f"{method} is not supported here")
         raise ApiError(404, "not-found", "no such endpoint")
 
@@ -328,23 +336,77 @@ class Visualizer:
             diagram = compile_view(checked.spec, checked.scope, model)
         except DisplayLimitExceeded as e:
             raise ApiError(422, "display-limit", str(e), {"count": e.count, "limit": e.limit}) from None
-        cid = uuid.uuid4().hex
-        self.compilations.put(cid, _Compilation(spec, scope, snap, model, diagram, owner))
-        digest = hashlib.sha256(json.dumps(spec.to_json(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         prim = {g.iri for g in scope.primary}
+        manifest = {
+            "requested": {"primaryGraphs": list(spec.primary_graphs), "contextGraphs": list(spec.context_graphs)},
+            "resolved": [{"path": g.path, "iri": g.iri, "primary": g.iri in prim, "role": g.role, "level": g.level}
+                         for g in (*scope.primary, *scope.context)],
+            "fingerprints": {cfg.graph_path(i): h for i, h in snap.fingerprints.items()},
+            "missing": [cfg.graph_path(i) for i in snap.missing]}
+        changes = None
+        if body.get("compareTo") is not None:
+            stored = self._stored(owner, body["compareTo"])
+            changes = diff(stored.data.get("baseline") or {}, baseline(diagram, model, spec.languages), model,
+                           (stored.data.get("manifest") or {}).get("fingerprints") or {}, manifest["fingerprints"])
+        cid = uuid.uuid4().hex
+        self.compilations.put(cid, _Compilation(spec, scope, snap, model, diagram, owner, manifest))
+        digest = hashlib.sha256(json.dumps(spec.to_json(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         return {
             "compileId": cid, "snapshotId": snap.id, "compilerVersion": COMPILER_VERSION, "specDigest": digest,
-            "manifest": {
-                "requested": {"primaryGraphs": list(spec.primary_graphs), "contextGraphs": list(spec.context_graphs)},
-                "resolved": [{"path": g.path, "iri": g.iri, "primary": g.iri in prim, "role": g.role, "level": g.level}
-                             for g in (*scope.primary, *scope.context)],
-                "fingerprints": {cfg.graph_path(i): h for i, h in snap.fingerprints.items()},
-                "missing": [cfg.graph_path(i) for i in snap.missing]},
+            "manifest": manifest,
             "diagram": {"nodes": to_json(diagram.nodes), "edges": to_json(diagram.edges),
                         "counts": to_json(diagram.counts)},
             "diagnostics": to_json(checked.diagnostics),
             "sourceDiagnostics": len(model.diagnostics),
+            "changes": changes,
         }
+
+    # ---- saved views --------------------------------------------------------------
+    def _store(self, owner) -> ViewStore:
+        self._config(owner)
+        return ViewStore(self.owners.views_dir(owner))
+
+    @staticmethod
+    def _storage_error(e: StorageError) -> ApiError:
+        status = {"not-found": 404, "bad-view-id": 400, "save-conflict": 409}.get(e.code, 422)
+        return ApiError(status, e.code, str(e), e.details)
+
+    def _stored(self, owner, vid):
+        try:
+            return self._store(owner).get(vid)
+        except StorageError as e:
+            raise self._storage_error(e) from None
+
+    def views(self, owner) -> dict:
+        return {"owner": owner, "views": self._store(owner).list()}
+
+    def view(self, owner, vid: str) -> dict:
+        stored = self._stored(owner, vid)
+        try:
+            spec_of(stored)
+        except StorageError as e:
+            raise self._storage_error(e) from None
+        return stored.data
+
+    def save(self, vid: str, body: dict) -> dict:
+        owner = body.get("owner")
+        store = self._store(owner)
+        c = self.compilations.get(body.get("compileId") or "")
+        if c is None:
+            raise ApiError(410, "compilation-expired", "save from a current compilation; compile again")
+        if c.owner != owner:
+            raise ApiError(422, "out-of-scope", "that compilation belongs to another owner")
+        if c.spec.id != vid:
+            raise ApiError(422, "id-mismatch", "the path names another view than the compiled spec")
+        expected = body.get("expectedRevision")
+        if expected is not None and (not isinstance(expected, int) or isinstance(expected, bool)):
+            raise ApiError(400, "bad-request", "expectedRevision is a number or null")
+        try:
+            revision = store.put(c.spec, body.get("layout") or {}, c.manifest,
+                                 baseline(c.diagram, c.model, c.spec.languages), expected)
+        except StorageError as e:
+            raise self._storage_error(e) from None
+        return {"id": vid, "revision": revision}
 
     def element(self, cid: str, eid: str) -> dict:
         c = self.compilations.get(cid)

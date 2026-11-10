@@ -308,3 +308,75 @@ def test_server_answers_only_to_its_host(tmp_path, monkeypatch):
     finally:
         s.shutdown()
         s.server_close()
+
+
+# ---- saved views -------------------------------------------------------------------------
+LAYOUT = {"positions": {"entity:0123456789abcdef": {"x": 10, "y": 20}}, "pinned": [], "viewport": {"x": 0, "y": 0, "zoom": 1}}
+
+
+def save(app, cid, expected=None, vid="v"):
+    r = app.handle("PUT", f"/visualizer/api/views/{vid}", {"Host": HOST, "Content-Type": "application/json"},
+                   json.dumps({"owner": "study", "compileId": cid, "layout": LAYOUT, "expectedRevision": expected}).encode())
+    return r.status, json.loads(r.body)
+
+
+def test_save_list_open_and_conflict(env, tmp_path):
+    app = env[0]
+    cid = compile_(app)[1]["compileId"]
+    assert save(app, cid) == (200, {"id": "v", "revision": 1})
+    assert save(app, cid, expected=1) == (200, {"id": "v", "revision": 2})
+    st, body = save(app, cid, expected=1)
+    assert (st, body["error"]["code"], body["error"]["details"]) == (409, "save-conflict", {"currentRevision": 2})
+    st, listed = call(app, "GET", "views?owner=study")
+    assert listed["views"] == [{"id": "v", "title": "V", "revision": 2}]
+    st, got = call(app, "GET", "views/v?owner=study")
+    assert st == 200 and got["spec"]["id"] == "v" and got["layout"]["positions"] == LAYOUT["positions"]
+    assert set(got["baseline"]["entities"]) == {f"{D}Order", f"{D}Item"}
+    assert got["manifest"]["fingerprints"].keys() == {"shared/domain", "upper/gufo"}
+    assert (tmp_path / "study" / "views" / "v.view.json").is_file()
+
+
+def test_save_needs_a_live_compilation_of_the_same_view(env):
+    app, _, clock = env
+    cid = compile_(app)[1]["compileId"]
+    assert save(app, cid, vid="other")[1]["error"]["code"] == "id-mismatch"
+    assert save(app, cid, vid="../../x")[1]["error"]["code"] in ("bad-view-id", "id-mismatch", "not-found")
+    clock.t += 3600
+    assert save(app, cid)[1]["error"]["code"] == "compilation-expired"
+
+
+def test_refresh_reports_what_changed_against_the_saved_baseline(tmp_path):
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    engine = RowEngine(TRIG)
+    app = Visualizer(Owners(hub), ScopedReader(engine), Settings(allowed_hosts=(HOST,)))
+    cid = compile_(app)[1]["compileId"]
+    save(app, cid)
+    # same number of triples, different content: Item is renamed and Order becomes disputed
+    changed = TRIG.replace('skos:prefLabel "Item"@en', 'skos:prefLabel "Line item"@en').replace(
+        "ok:status ok:asserted ; ok:evidence", "ok:status ok:disputed ; ok:evidence")
+    app.reader = ScopedReader(RowEngine(changed))
+    assert len(RowEngine(changed).rows) == len(engine.rows)
+    st, out = call(app, "POST", "compile", {"owner": "study", "spec": spec(), "mode": "tolerant", "compareTo": "v"})
+    assert st == 200
+    ch = out["changes"]
+    assert ch["changedLabels"] == [f"{D}Item"] and ch["changedStatus"] == [f"{D}Order"]
+    assert ch["changedGraphs"] == ["shared/domain"]
+    assert ch["addedEntities"] == ch["removedEntities"] == []
+
+
+def test_a_vanished_entity_is_marked_and_never_replaced(tmp_path):
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    app = Visualizer(Owners(hub), ScopedReader(RowEngine(TRIG)), Settings(allowed_hosts=(HOST,)))
+    s = spec(entities=[f"{D}Order", f"{D}Item"])
+    cid = call(app, "POST", "compile", {"owner": "study", "spec": s})[1]["compileId"]
+    save(app, cid)
+    gone = "\n".join(l for l in TRIG.splitlines() if "<{D}Item> a ok:Concept".replace("{D}", D) not in l)
+    app.reader = ScopedReader(RowEngine(gone))
+    st, out = call(app, "POST", "compile", {"owner": "study", "spec": s, "mode": "tolerant", "compareTo": "v"})
+    assert st == 200 and out["changes"]["removedEntities"] == [f"{D}Item"]
+    assert [d["code"] for d in out["diagnostics"]] == ["unknown-entity"]
+    assert all(f"{D}Item" not in n["members"] for n in out["diagram"]["nodes"])
+    strict = call(app, "POST", "compile", {"owner": "study", "spec": s})
+    assert strict[0] == 422 and strict[1]["error"]["code"] == "invalid-spec"

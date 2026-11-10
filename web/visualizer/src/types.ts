@@ -48,7 +48,18 @@ export type Compilation = {
               fingerprints: Record<string, string>; missing: string[] };
   diagram: { nodes: DNode[]; edges: DEdge[]; counts: Counts };
   diagnostics: Issue[];
+  changes?: Changes | null;
 };
+export type Changes = {
+  addedEntities: string[]; removedEntities: string[]; notShownEntities: string[]; changedLabels: string[];
+  changedStatus: string[]; addedRelationships: string[]; removedRelationships: string[];
+  notShownRelationships: string[]; changedGraphs: string[];
+};
+export type Layout = { positions: Record<string, { x: number; y: number }>; pinned: string[];
+                       viewport: { x: number; y: number; zoom: number } | null; engine: string };
+export type Artifact = { artifactVersion: 1; revision: number; spec: ViewSpec; layout: Layout;
+                         manifest: Compilation['manifest']; baseline: unknown };
+export type SavedView = { id: string; title: string | null; revision: number | null; error?: string };
 export type SearchHit = { iri: string; label: string; level: string | null; matched: string; graphs: string[];
                           context: boolean };
 
