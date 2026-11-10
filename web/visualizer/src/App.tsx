@@ -267,13 +267,14 @@ export function App() {
       {compilation?.diagnostics.length ? <div role="status" className="notice">{compilation.diagnostics.length} reference(s) no longer resolve: {compilation.diagnostics.map((d) => d.path).join(', ')}</div> : null}
       {counts && counts.omittedNodes > 0 && (() => {
         const total = counts.shownNodes + counts.omittedNodes;
-        const fits = NODE_LIMITS.find((n) => n >= total);
+        // strictly above the current limit, so the click always shows more (notes take places too)
+        const fits = NODE_LIMITS.find((n) => n >= total && n > sel.layout.maxNodes);
         return (
           <div role="status" className="notice" aria-label="cut by the display limit">
             Showing {counts.shownNodes} of {total} nodes: the rest is over this view's limit of {sel.layout.maxNodes}.{' '}
             {fits
               ? <button type="button" disabled={busy} onClick={() => void apply({ ...sel, layout: { ...sel.layout, maxNodes: fits, maxEdges: Math.max(sel.layout.maxEdges, Math.min(400, 2 * fits)) } }, extra)}>
-                  Show all {total}</button>
+                  Show up to {fits} nodes</button>
               : <>A view shows at most {MAX_NODES}; pick starting concepts or fewer graphs to see the rest.</>}
           </div>
         );

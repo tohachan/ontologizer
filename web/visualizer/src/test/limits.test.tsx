@@ -88,7 +88,26 @@ it('a level selection over the limit is shown in part, with a way to show all', 
   const cut = await screen.findByLabelText('cut by the display limit');
   expect(cut.textContent).toContain('Showing 80 of 118 nodes');
   expect(screen.queryByRole('alert')).toBeNull();                       // a diagram, not an error
-  fireEvent.click(screen.getByText('Show all 118'));
+  fireEvent.click(screen.getByText('Show up to 120 nodes'));
   await waitFor(() => expect(specs.at(-1)!.presentation.maxNodes).toBe(120));
   await waitFor(() => expect(screen.queryByLabelText('cut by the display limit')).toBeNull());
+});
+
+it('the show-more button always raises the limit, even when notes take places', async () => {
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const path = decodeURIComponent(url.replace('/visualizer/api', ''));
+    const ok = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    if (path === '/catalog') return ok(catalog);
+    if (path === '/catalog?owner=study') return ok(ownerCatalog);
+    if (path === '/views?owner=study') return ok({ views: [] });
+    const spec = JSON.parse(init!.body as string).spec as ViewSpec;
+    specs.push(spec);
+    const c = compilation('c' + specs.length);
+    // 80 concepts and one note: at the limit of 80, 79 shown (78 cards and the note) and 1 omitted
+    c.diagram.counts = { ...c.diagram.counts, ...(spec.presentation.maxNodes <= 80 ? { shownNodes: 79, omittedNodes: 1 } : { shownNodes: 81, omittedNodes: 0 }) };
+    return ok(c);
+  }));
+  await byLevel();
+  fireEvent.click(await screen.findByText('Show up to 120 nodes'));
+  await waitFor(() => expect(specs.at(-1)!.presentation.maxNodes).toBe(120));
 });
