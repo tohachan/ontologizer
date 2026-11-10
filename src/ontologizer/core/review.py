@@ -396,7 +396,13 @@ def _note(c: dict, by: str, run_id: str, comment: str) -> None:
     note = c.get("note", "")
     if re.search(r"Review \([^()]*, " + re.escape(run_id) + r"\): " + re.escape(comment), note):
         return
-    c["note"] = (note + f" Review ({by}, {run_id}): {comment}").strip()
+    remark = f"Review ({by}, {run_id}): {comment}"
+    # a comment of the same run that a reviewer has since extended replaces its earlier form, so it is not kept twice
+    for m in re.finditer(r"Review \([^()]*, " + re.escape(run_id) + r"\): (.*?)(?= Review \(|$)", note, re.S):
+        if m.group(1) and comment.startswith(m.group(1).rstrip()):
+            c["note"] = note[:m.start()] + remark + note[m.end():]
+            return
+    c["note"] = (note + " " + remark).strip()
 
 
 def require_review(cfg) -> tuple[bool, str]:

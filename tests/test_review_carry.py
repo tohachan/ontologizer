@@ -165,6 +165,12 @@ def test_applying_a_revise_twice_notes_it_once(study, tmp_path):
     review.apply(run, "another signature")             # signed otherwise: still the same remark
     session = next(c for c in _level(seeds, "domain")["concepts"] if c["id"] == "session")
     assert session["note"].count("r1): wrong") == 1
+    rv = _rv(run)                                      # the reviewer extends the comment: it replaces the earlier one
+    next(i for i in rv["items"] if i["ref"] == "domain:session")["comment"] = "wrong. And more."
+    run.path("review.yaml").write_text(yaml.safe_dump(rv))
+    review.apply(run, "reviewer")
+    session = next(c for c in _level(seeds, "domain")["concepts"] if c["id"] == "session")
+    assert session["note"].count("r1): wrong") == 1 and session["note"].endswith("Review (reviewer, r1): wrong. And more.")
 
 
 # ---- 4. verification shown honestly ------------------------------------------------------
