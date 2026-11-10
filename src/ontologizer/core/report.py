@@ -216,6 +216,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
     policies: dict[str, int] = {}
     recheck_types: dict[str, dict] = {}
     ev_checked = ev_sup = ev_final = 0
+    unverified_total = removed_total = 0
     ev_kinds: dict[str, list[int]] = {}
     cov_num = cov_den = 0
     unmeasured = []
@@ -261,6 +262,12 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
             row["verification"] = v["evidence"]
             row["absences"] = len(v.get("absences", []))
             row["recheck"] = (v.get("applied") or {}).get("recheck")
+            if v.get("applied"):
+                ap = v["applied"]
+                row["unverified"] = len(ap.get("unverified") or [])
+                row["removed_claims"] = len(ap.get("removed_claims") or [])
+                unverified_total += row["unverified"]
+                removed_total += row["removed_claims"]
             if v["evidence"]["share"] is not None:
                 ev_checked += v["evidence"]["checked"]
                 ev_sup += v["evidence"]["supported"]
@@ -304,6 +311,8 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
         "verified_evidence_by_source_kind": {k: round(a / b, 3) for k, (a, b) in sorted(ev_kinds.items()) if b} or None,
         "recheck_change_rate": {t: round(x["changed"] / x["rechecked"], 3) for t, x in sorted(recheck_types.items())
                                 if x["rechecked"]} or None,
+        "unverified_negatives": unverified_total,
+        "removed_in_verification": removed_total,
         "loo_stability": st["stable_share"],
         "cq_coverage": round(answered / len(cqs), 3) if cqs else None,
     }
@@ -351,6 +360,10 @@ def render(doc: dict) -> str:
              *([f"| Verified evidence, after the recheck, by kind of source | "
                 f"{', '.join(f'{k} {v:.3f}' for k, v in m['verified_evidence_by_source_kind'].items())} |"]
                if len(m.get("verified_evidence_by_source_kind") or {}) > 1 else []),
+             f"| Negative evidence judgements kept unverified (no recheck or owner confirmed them) | "
+             f"{_fmt(m.get('unverified_negatives'))} |",
+             f"| Claims removed in verification (`applied.removed_claims`, with reasons) | "
+             f"{_fmt(m.get('removed_in_verification'))} |",
              f"| Leave-one-out stability | {_fmt(m['loo_stability'])} |",
              f"| Competency-question coverage | {_fmt(m['cq_coverage'])} |",
              f"| Consistency clashes (engine reasoning) | {_fmt(m.get('consistency_clashes'))} |", ""]

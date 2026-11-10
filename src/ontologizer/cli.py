@@ -21,7 +21,7 @@ Analysis process (docs/process.md), each with --run ID (default `process.run`):
   ontologizer reconcile PROJECT [--apply]    stage 3: pairs, agreement, disputes / build application/<p>.json
   ontologizer map PROJECT [--apply]          stage 4: candidate targets, category second opinion / write maps_to
   ontologizer group                          stage 5: unmapped concepts grouped by meaning, family support
-  ontologizer verify PROJECT [--apply]       stage 6: every claim against its source; rechecks
+  ontologizer verify PROJECT [--changed|--apply]   stage 6: every claim (or only the new and changed) against its source; rechecks
   ontologizer stability | report [--compare A B]   stage 7
   ontologizer release-compare A B [--run-a ID]    two releases by meaning: kept, added, dropped, with reasons
   ontologizer review build|apply --by MODEL [--effort E]   stage 8: agent review; gold sample NAME | gold calibrate FILE

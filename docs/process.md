@@ -33,7 +33,8 @@ runs/<run>/
   map/<project>.json                       stage 4: candidates, category second opinion
   map/<project>.answers.json               stage 4: the LLM's mapping decisions
   consolidate/groups.json                  stage 5: meaning groups and their family support
-  verify/<project>.json                    stage 6: per-claim verdicts, rechecks, absence protocols
+  verify/<project>.json                    stage 6: per-claim verdicts, rechecks, absence protocols, removed claims
+  verify/<project>.owner.json              stage 6: the owner's own evidence verdicts, when any
   stability.json                           stage 7
   report.json, report.md                   stage 7
   review.yaml                              stage 8: the reviewing agent's verdict per shared concept
@@ -133,7 +134,20 @@ After each file, `support.projects` and `families` of every shared concept are r
 
 Every evidence claim is checked: the cited lines are read from the source at the cited commit, and the decision port (or, in llm mode, a model other than the extractor) judges whether they support the claim. The **verified-evidence share** is reported. A claim whose evidence does not hold becomes `disputed` or is removed.
 
-Low-confidence and disputed judgements (mapping kind, category) and every `partial` mapping are rechecked by a model other than the one that made them. The default rechecker is `process.recheck` (another vendor, e.g. `{harness: codex, model: …}`); its `fallback` (e.g. the other Claude model) may answer only with a `fallback_reason`, and `verify --apply` refuses any other rechecker. The report counts rechecks by policy and gives the **recheck change rate** per item type, including `mapping-partial`.
+Low-confidence and disputed judgements (mapping kind, category), every `partial` mapping and **every evidence item the decision port judged unsupported** are rechecked by a model other than the one that made them. The default rechecker is `process.recheck` (another vendor, e.g. `{harness: codex, model: …}`); its `fallback` (e.g. the other Claude model) may answer only with a `fallback_reason`, and `verify --apply` refuses any other rechecker. The report counts rechecks by policy and gives the **recheck change rate** per item type, including `mapping-partial`.
+
+A mapping is rechecked against the target's shared definition as it is when `verify` runs: the owner's shared-level files after consolidation, or, for an overlay target, the release read in stage 4. The item carries it as `target` with `as_of`, and the pack says which version in `shared_definitions`. A verdict given against an earlier wording is not carried.
+
+**What `verify --apply` removes.** A score from the decision port never removes a claim on its own: a cheap classifier is often reversed by the recheck. Evidence is dropped only when:
+- its cited lines are missing at the cited commit (a mechanical fact);
+- the recheck confirmed the negative judgement, or changed a judgement to `unsupported`;
+- the owner decided so in `verify/<p>.owner.json`: `{by: <owner>, verdicts: [{claim, path, lines, verdict: supported | unsupported, reason}]}`, where an entry without `path` covers every evidence item of the claim. Only the owner writes this file, never an agent. Its verdicts override every other judgement.
+
+A negative judgement that nothing confirmed keeps its evidence and its claim. Such a negative is left unanswered in the recheck, or has no independent rechecker. The evidence gets an `unverified` note, and so does the claim when all its evidence is of that kind. It is listed in `applied.unverified`, and the run report counts it. The recheck may leave these items unanswered; every other recheck item still needs a verdict and a reason.
+
+Every removed claim is recorded in `applied.removed_claims` of `verify/<p>.json`, with its reason and its original form (`restore`). This includes a relation removed because one of its ends was removed: it has `cascade_of` and its own evidence verdicts, since its evidence may have held. A `broader` link to a removed concept is listed in `applied.detached_broader`. A mapping that the recheck changes to another target or kind obeys the rules of `map --apply`: a known target, a kind the preset allows, and for `partial` both `overlap` and `differs` in the verdict's value. They are written into the note, as in stage 4.
+
+**Verifying again.** `verify --apply` runs once per verification. For claims added or changed afterwards (by a later decision, for example), `ontologizer verify <p> --changed` asks the decision port only about evidence whose claim wording or citation (path, lines, commit, kind) changed. It keeps the earlier judgements of the rest, and `--since <run>` keeps those of another run's verify. In both a full and a `--changed` verify, a recheck verdict given on the same content is carried into the new pack (`carried`) and is not asked again. The earlier answers file is set aside as `<p>.recheck.answers.prev.json`, because its ids are positions in the earlier pack. Then `verify --apply` runs as usual.
 
 An **absence claim** ("the project has no X") requires a recorded protocol: what was searched for, where, and how (queries, paths, tools), and the result.
 
@@ -257,7 +271,8 @@ Every metric is computed by code from the run directory and is written to `repor
 | Extraction agreement | matched concepts ÷ (concepts of A + concepts of B − matched), per project pair of extractors | 3 |
 | Jev–LLM disagreement rate | questions answered by both Jev and an LLM (the category second opinion; the mapping candidate against the chosen target) where the answers differ ÷ such questions | 4, 6 |
 | Verified-evidence share | evidence items judged supporting ÷ evidence items checked; unchecked items are counted separately | 6 |
-| Verified-evidence share after the recheck | the same, with the recheck's verdicts overriding the first judgement | 6 |
+| Verified-evidence share after the recheck | the same, with the recheck's verdicts (and the owner's) overriding the first judgement | 6 |
+| Unverified negatives | evidence items judged unsupported that no recheck or owner confirmed, kept with their claims; with the number of claims removed in verification | 6 |
 | Leave-one-out stability | shared concepts marked `stable` ÷ shared concepts | 7 |
 | Competency-question coverage | questions answered ÷ questions; `partial` and `unanswered` are listed by id | 7 |
 | Consistency clashes | contradictions the engine's reasoner finds over the store (`onto_reason`, RDFS, dry run); releases have their own IRIs, so a clash lies inside one version | 7 |
@@ -275,7 +290,7 @@ The report also records, per stage, the decision mode and the number of decision
 | 3 | `ontologizer reconcile PROJECT` (pairs and disputes), `ontologizer reconcile PROJECT --apply` |
 | 4 | `ontologizer map PROJECT`, `ontologizer map PROJECT --apply` |
 | 5 | `ontologizer group`, then `consolidate consolidation/<run>.yaml` |
-| 6 | `ontologizer verify PROJECT`, `ontologizer verify PROJECT --apply` |
+| 6 | `ontologizer verify PROJECT [--changed \| --since RUN]`, `ontologizer verify PROJECT --apply` |
 | 7 | `ontologizer stability`, `ontologizer report`, `ontologizer report --compare A B`, `ontologizer release-compare A B [--run-a ID]` |
 | 8 | `ontologizer review build`, `ontologizer review apply`, `ontologizer gold sample`, `ontologizer gold calibrate` |
 | 9 | in the target owner's overlay run: `brief`, `reconcile`, `map`, `verify` on the target, then `ontologizer overlay [--previous FILE --compare FILE]` |

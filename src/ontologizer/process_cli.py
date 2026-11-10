@@ -255,15 +255,24 @@ def cmd_verify(args) -> int:
         print(why, file=sys.stderr)
         return 2
     if args.apply:
+        if args.changed or args.since:
+            print("--changed and --since belong to the verification, not to --apply", file=sys.stderr)
+            return 2
         st = verify.apply(run, args.project, keep_failed=args.keep_failed)
-        print(f"{args.project}: {len(st['removed_claims'])} claims removed, {st['dropped_evidence']} evidence items "
-              f"dropped, {st['rechecks_changed']} judgements changed by the recheck ({st['recheck']})")
+        print(f"{args.project}: {len(st['removed_claims'])} claims removed ({st['removed_with_an_end']} with a removed "
+              f"end), {st['dropped_evidence']} evidence items dropped, {len(st['unverified'])} negative judgements "
+              f"kept unverified (no recheck confirmed them; {len(st['kept_unverified'])} claims rest on them only), "
+              f"{st['rechecks_changed']} judgements changed by the recheck ({st['recheck']}). Removed claims, with "
+              f"their reasons and original form: `applied.removed_claims` in "
+              f"{run.path('verify', args.project + '.json')}")
         return 0
-    d = verify.analyse(run, args.project)
+    d = verify.analyse(run, args.project, changed=args.changed, since=args.since)
     e = d["evidence"]
-    print(f"{args.project}: {e['checked']} evidence items checked (mode {d['mode']}): {e['supported']} supported, "
+    kept = f"; {d['kept']['evidence']} judgements kept from run {d['kept']['from']}" if d.get("kept") else ""
+    print(f"{args.project}: {e['checked']} evidence items checked (mode {d['mode']}{kept}): {e['supported']} supported, "
           f"{e['unsupported']} unsupported, {e['missing']} missing, {e['unchecked']} unchecked; share {e['share']}; "
-          f"{len(d['absences'])} absence claims; {d['rechecks']} items to recheck in "
+          f"{len(d['absences'])} absence claims; {d['rechecks']} items to recheck ({d['carried_rechecks']} carried "
+          f"from an earlier answer, {d['to_answer']} to answer) in "
           f"{run.path('verify', args.project + '.recheck.json')}")
     rc = verify.rechecker(run)
     if d["rechecks"] and rc:
@@ -470,6 +479,9 @@ def register(sub) -> None:
     add("group", cmd_group)
     s = add("verify", cmd_verify); s.add_argument("project"); s.add_argument("--apply", action="store_true")
     s.add_argument("--keep-failed", action="store_true", help="keep claims left without supporting evidence")
+    s.add_argument("--changed", action="store_true",
+                   help="judge only the claims new or changed since the last verify of this run; keep the rest")
+    s.add_argument("--since", help="like --changed, keeping the judgements of another run's verify")
     add("stability", cmd_stability)
     s = add("report", cmd_report); s.add_argument("--compare", nargs=2, metavar=("A", "B"))
     s = add("release-compare", cmd_release_compare); s.add_argument("a", help="earlier version, e.g. 0.1")
