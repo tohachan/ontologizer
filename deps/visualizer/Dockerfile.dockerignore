@@ -10,5 +10,8 @@
 !presets/
 !vendor/
 !schemas/
+!web/visualizer/
+web/visualizer/node_modules
+web/visualizer/dist
 **/__pycache__
 **/*.pyc

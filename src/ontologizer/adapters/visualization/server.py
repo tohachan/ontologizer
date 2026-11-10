@@ -33,7 +33,9 @@ def default_hub() -> Path:
 def build(hub: Path, host: str, port: int, allow_hosts=()) -> ThreadingHTTPServer:
     url = (read_hub(hub).get("store") or {}).get("url")
     allowed = (f"127.0.0.1:{port}", f"localhost:{port}", *allow_hosts)
-    app = Visualizer(Owners(hub), ScopedReader(OpenOntologies(url)), Settings(allowed_hosts=tuple(dict.fromkeys(allowed))))
+    static = Path(os.environ.get("VISUALIZER_STATIC") or KIT_ROOT / "web" / "visualizer" / "dist")
+    app = Visualizer(Owners(hub), ScopedReader(OpenOntologies(url)),
+                     Settings(allowed_hosts=tuple(dict.fromkeys(allowed)), static_dir=static))
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ontologizer-visualizer"

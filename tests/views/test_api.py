@@ -249,6 +249,34 @@ def test_request_guards(env, method, path, headers, body, status, code):
     assert (r.status, json.loads(r.body)["error"]["code"]) == (status, code)
 
 
+def test_static_bundle_is_served_and_confined(env, tmp_path):
+    app = env[0]
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>V</title>")
+    (dist / "assets" / "app.js").write_text("console.log(1)")
+    (tmp_path / "secret.txt").write_text("no")
+    app.settings.static_dir = dist
+    get = lambda p, host=HOST: app.handle("GET", p, {"Host": host})
+    r = get("/")
+    assert r.status == 200 and b"<title>V</title>" in r.body
+    h = dict(r.headers)
+    assert "frame-ancestors 'none'" in h["Content-Security-Policy"] and h["Cache-Control"] == "no-store"
+    js = get("/assets/app.js")
+    assert js.body == b"console.log(1)" and dict(js.headers)["Content-Type"].startswith("text/javascript")
+    for escape in ("/../secret.txt", "/assets/../../secret.txt", "/%2e%2e/secret.txt"):
+        assert b"no" != get(escape).body and b"<title>V</title>" in get(escape).body
+    assert get("/views/some-view").body == r.body                   # client-side route
+    assert get("/", host="evil.example").status == 421
+    post = app.handle("POST", "/", {"Host": HOST, "Content-Type": "application/json"}, b"{}")
+    assert post.status == 405
+
+
+def test_without_a_bundle_the_page_says_how_to_build_it(env):
+    st = env[0].handle("GET", "/", {"Host": HOST})
+    assert st.status == 404 and b"npm run build" in st.body
+
+
 def test_same_origin_is_accepted(env):
     assert call(env[0], "GET", "catalog", headers={"Origin": f"http://{HOST}"})[0] == 200
 

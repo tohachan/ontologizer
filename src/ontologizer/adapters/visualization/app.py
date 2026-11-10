@@ -11,10 +11,12 @@ import hashlib
 import json
 import threading
 import time
+import mimetypes
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from rdflib import URIRef
@@ -56,6 +58,7 @@ class Settings:
     catalog_ttl: float = 30
     max_parallel_reads: int = 2
     read_wait: float = 10
+    static_dir: Path | None = None            # the built browser bundle (web/visualizer/dist)
 
 
 class _Cache:
@@ -118,7 +121,9 @@ class Visualizer:
             url = urlsplit(target)
             path = unquote(url.path)
             if not path.startswith(API + "/"):
-                raise ApiError(404, "not-found", "no such endpoint")
+                if method != "GET":
+                    raise ApiError(405, "method-not-allowed", f"{method} is not supported here")
+                return self._static(path)
             route = path[len(API) + 1:].split("/")
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
             payload = self._json(body) if method in ("POST", "PUT") else None
@@ -171,6 +176,27 @@ class Visualizer:
             case (_, ["health"] | ["catalog"] | ["search"] | ["compile"] | ["plan"]):
                 raise ApiError(405, "method-not-allowed", f"{method} is not supported here")
         raise ApiError(404, "not-found", "no such endpoint")
+
+    def _static(self, path: str) -> Response:
+        """The browser bundle. A path that does not name a file of the bundle gets index.html, so a
+        reload keeps working; nothing outside the bundle directory is ever served."""
+        root = self.settings.static_dir
+        if root is None or not (root / "index.html").is_file():
+            raise ApiError(404, "not-found", "the browser bundle is not built (npm run build in web/visualizer)")
+        root = root.resolve()
+        target = (root / path.lstrip("/")).resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            target = root / "index.html"
+        kind = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if kind.startswith("text/") or kind in ("application/javascript", "application/json"):
+            kind += "; charset=utf-8"
+        cache = "no-store" if target.name == "index.html" else "public, max-age=31536000, immutable"
+        return Response(200, target.read_bytes(), (
+            ("Content-Type", kind), ("Cache-Control", cache), ("X-Content-Type-Options", "nosniff"),
+            ("X-Frame-Options", "DENY"), ("Referrer-Policy", "no-referrer"),
+            ("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                        "img-src 'self' data:; worker-src 'self' blob:; connect-src 'self'; "
+                                        "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")))
 
     # ---- engine access ----------------------------------------------------------
     def _engine(self, fn):

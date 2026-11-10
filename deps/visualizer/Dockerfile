@@ -5,6 +5,14 @@
 # the engine token arrives through the environment at run time.
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
+# The browser bundle, from the committed lock file.
+FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS web
+WORKDIR /web
+COPY web/visualizer/package.json web/visualizer/package-lock.json web/visualizer/.npmrc ./
+RUN npm ci --no-audit --no-fund
+COPY web/visualizer/ ./
+RUN npm run build
+
 FROM python:3.14-slim-bookworm@sha256:3fe1a0b6c2d6b2ebb572906cdabeca75aeb558c0c17db5ffefbcf8094871c32b
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -25,6 +33,7 @@ COPY presets ./presets
 COPY vendor ./vendor
 COPY schemas ./schemas
 COPY ontologizer.yaml ./
+COPY --from=web /web/dist ./web/visualizer/dist
 RUN uv sync --frozen --no-dev && rm /usr/local/bin/uv && chmod -R a+rX /app
 ENV ONTOLOGIZER_HUB=/app
 USER 10001:10001

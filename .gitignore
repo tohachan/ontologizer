@@ -18,3 +18,6 @@ ontologizer.local.yaml
 # local Open Ontologies server: default engine clone, per-machine settings
 /oo/
 deps/open-ontologies/local.conf
+# visualizer browser bundle: dependencies and build output
+web/visualizer/node_modules/
+web/visualizer/dist/
