@@ -5,7 +5,9 @@
   concepts and their evidence, and every relation of the shared levels, for
   a strong agent to mark accept / reject / revise. A verdict stands only while
   what it judged is unchanged, so after an edit only the changes need one;
-  `--since RUN` carries accepted verdicts over from an earlier run.
+  `--since RUN` carries accepted verdicts over from an earlier run. A
+  carried verdict whose support changed says so (`support_changed`), and
+  supporting concepts verified in an earlier run show that run's result.
 - `review apply` makes accepted concepts `asserted`, removes rejected ones
   (and the project mappings to them), notes revisions, marks as `disputed`
   what an open reading or a declared dispute holds apart, and records the
@@ -48,12 +50,61 @@ def review_path(run: Run) -> Path:
     return run.path("review.yaml")
 
 
+def _runs_dir(cfg) -> Path:
+    return cfg.root / (cfg.data.get("process") or {}).get("runs", "runs")
+
+
+def _earlier_runs(run: Run, since: str | None) -> list[Run]:
+    """`since`, then the run its review was built `since`, and so on: where earlier verification lives."""
+    out, seen, rid = [], {run.id}, since
+    while rid and rid not in seen and len(out) < 50:
+        seen.add(rid)
+        r = Run(run.cfg, rid)
+        out.append(r)
+        q = r.path("review.yaml")
+        rid = (yaml.safe_load(q.read_text()) or {}).get("since") if q.is_file() else None
+    return out
+
+
+CHECKED = ("supported", "unsupported", "missing")
+
+
+def _verification(runs: list[Run], cache: dict, project: str, pc: dict) -> dict:
+    """The stage 6 result for a supporting concept: from this run (`runs[0]`) or, when this run did not check
+    it, from the latest earlier run that checked the evidence it has now. A concept that stage 6 removed and that
+    is back in the application file is `restored`, with the result that removed it in `verified_before`."""
+    from ontologizer.core.verify import final_items
+    claim = f"concept:{pc['id']}"
+    now_ev = {(e.get("path"), str(e.get("lines") or "")) for e in pc.get("evidence", [])}
+    for k, r in enumerate(runs):
+        if (r.id, project) not in cache:
+            v = load_json(r.path("verify", f"{project}.json"), {}) or {}
+            cache[(r.id, project)] = (v, final_items(r, project, v) if v else [])
+        v, fin = cache[(r.id, project)]
+        items = [i for i in fin if i["claim"] == claim]
+        vi = [i for i in items if i["final"] in CHECKED]
+        ok = sum(1 for i in vi if i["final"] == "supported")
+        share = f"{ok}/{len(vi)}" if vi else "unchecked"
+        if claim in ((v.get("applied") or {}).get("removed_claims") or []):
+            return {"verified": "restored", "verified_before": share, "verified_in": r.id}
+        if not vi:
+            continue
+        if k == 0:
+            return {"verified": share}
+        if not now_ev or not now_ev <= {(i.get("path"), str(i.get("lines") or "")) for i in items}:
+            break   # that run checked other evidence than the concept has now
+        return {"verified": share, "verified_in": r.id}
+    return {"verified": "unchecked"}
+
+
 def build(run: Run, frame: Frame, since: str | None = None) -> dict:
     """`since`: an earlier run whose accepted verdicts stand for whatever has not changed since."""
     st = load_json(run.path("stability.json"), {}) or {}
     docs = application_docs(run.cfg, [p for p in frame.projects if p not in frame.overlay])
-    from ontologizer.core.verify import final_items
-    ver = {p: final_items(run, p) for p in docs}
+    if since and not (_runs_dir(run.cfg) / since / "review.yaml").is_file():
+        raise ReviewError(f"--since {since}: no review at {_runs_dir(run.cfg) / since / 'review.yaml'}")
+    runs = [run] + _earlier_runs(run, since)
+    cache: dict = {}
     held = disputes(run.cfg, docs)
     items = []
     for lv, f in shared_files(run.cfg).items():
@@ -63,13 +114,10 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
             for p, d in docs.items():
                 for pc in d["concepts"]:
                     if any(m.get("target") == ref for m in pc.get("maps_to", [])):
-                        vi = [i for i in ver[p] if i["claim"] == f"concept:{pc['id']}"
-                              and i["final"] in ("supported", "unsupported", "missing")]
-                        ok = sum(1 for i in vi if i["final"] == "supported")
                         sup.append({"concept": f"{p}:{pc['id']}", "label": pc["label"],
                                     "category": pc.get("upper_category"),
                                     "kind": next(m["kind"] for m in pc["maps_to"] if m.get("target") == ref),
-                                    "verified": f"{ok}/{len(vi)}" if vi else "unchecked",
+                                    **_verification(runs, cache, p, pc),
                                     "evidence": [f"{e['path']}:{e.get('lines', '')}" for e in pc.get("evidence", [])[:2]]})
             s = (st.get("concepts") or {}).get(ref, {})
             items.append({"ref": ref, "label": c["label"], "category": c["upper_category"],
@@ -84,13 +132,21 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
     for i in items:
         i["fingerprint"] = _fingerprint(i)
     relations = _relation_items(run, docs)
-    doc = {"run": run.id, "built": now(),
+    doc = {"run": run.id, "built": now(), **({"since": since} if since else {}),
            "instructions": "Set `verdict` of every item and relation with an empty one to accept, reject or revise "
                            "(with `comment`; `revise` keeps a relation unchanged, so reject one that is wrong), "
                            "then record the gate with `ontologizer review apply --by <name>`. A shared concept whose "
                            "`category_differs` lists categories has a supporting project concept typed otherwise: "
                            "keep the shared category only for a reason you state. A relation with `counterpart: "
-                           "false` has no relation between the supporting project concepts, so check it in the source. "
+                           "false` has no project relation of its type and direction between the concepts behind "
+                           "its ends (`counterpart_other` lists the ones of another type or direction), so check it "
+                           "in the source. An item with `support_changed` keeps a verdict given on other support "
+                           "(`judged_support`): look at what was added or removed, change the verdict if it no longer "
+                           "holds, then delete `support_changed`. A verdict with `carried_from` comes from an earlier "
+                           "run; set it to null to reopen it, and a verdict or comment you change is your own. "
+                           "`verified` is the stage 6 result of a supporting concept (`verified_in`: the earlier run "
+                           "that checked it); `restored` means stage 6 removed it and it was put back afterwards "
+                           "(`verified_before`: the result that removed it), so check its evidence in the source. "
                            "`readings` lists the partial or disputed concepts behind a shared one: an open reading "
                            "or a declared dispute makes it `disputed` whatever the verdict, until a consolidation "
                            "file settles it with a reason.",
@@ -102,13 +158,13 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
         kept = _carry(yaml.safe_load(p.read_text()) or {}, items, relations)
     carried = 0
     if since:
-        q = run.cfg.root / (run.cfg.data.get("process") or {}).get("runs", "runs") / since / "review.yaml"
-        if not q.is_file():
-            raise ReviewError(f"--since {since}: no review at {q}")
+        q = _runs_dir(run.cfg) / since / "review.yaml"
         carried = _carry(yaml.safe_load(q.read_text()) or {}, items, relations, accepted_only=True, source=since)
     p.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=120))
     open_ = sum(1 for i in items + relations if not i.get("verdict"))
+    changed = [{"ref": i["ref"], **i["support_changed"]} for i in items if i.get("support_changed")]
     return {"items": len(items), "relations": len(relations), "open": open_, "kept": kept, "carried": carried,
+            "support_changed": changed, "reopened": sum(1 for i in items + relations if i.get("reopened")),
             "path": str(p)}
 
 
@@ -133,36 +189,107 @@ def _carry(old: dict, items: list[dict], relations: list[dict], accepted_only: b
         by_ref = {x["ref"]: x for x in theirs}
         for i in mine:
             o = by_ref.get(i["ref"])
-            if i.get("verdict") or not o or not o.get("verdict") or not same(o, i):
+            if i.get("verdict") or not o or not same(o, i):
                 continue
+            if not o.get("verdict"):
+                if source is None and (o.get("carried_from") or o.get("reopened")):
+                    i["reopened"] = o.get("reopened") or o["carried_from"]   # a reviewer reopened a carried verdict
+                continue
+            if source and i.get("reopened"):
+                continue   # reopened: carrying it again would undo the reopening
             if accepted_only and o["verdict"] != "accept":
                 continue
             i["verdict"], i["comment"] = o["verdict"], o.get("comment")
-            if source or o.get("carried_from"):
-                i["carried_from"] = source or o["carried_from"]
+            i.pop("reopened", None)
+            if source:
+                i["carried_from"], i["carried_as"] = source, {"verdict": o["verdict"], "comment": o.get("comment")}
+            elif is_carried(o):   # still the carried verdict; one the reviewer changed is the reviewer's own
+                i["carried_from"] = o["carried_from"]
+                if "carried_as" in o:
+                    i["carried_as"] = o["carried_as"]
+            if "support" in i:
+                _mark_support(o, i)
             n += 1
     return n
 
 
+def is_carried(i: dict) -> bool:
+    """A verdict carried from an earlier run that the reviewer has not changed since (verdict and comment)."""
+    if not i.get("carried_from"):
+        return False
+    was = i.get("carried_as")
+    return was is None or (was.get("verdict"), was.get("comment")) == (i.get("verdict"), i.get("comment"))
+
+
+def _support_refs(i: dict) -> list[str]:
+    return sorted(s["concept"] for s in i.get("support") or [])
+
+
+def _mark_support(o: dict, i: dict) -> None:
+    """A verdict outlives a change of support (new evidence would otherwise reset every verdict on each update),
+    but the item says what it was judged on and what changed, until the reviewer deletes `support_changed`."""
+    if "support" not in o and "judged_support" not in o:
+        return   # an older file: nothing to compare with
+    keep = o.get("support_changed") and "judged_support" in o and (not o.get("carried_from") or is_carried(o))
+    judged = o["judged_support"] if keep else _support_refs(o)
+    now_ = _support_refs(i)
+    if judged != now_:
+        i["judged_support"] = judged
+        i["support_changed"] = {"added": sorted(set(now_) - set(judged)), "removed": sorted(set(judged) - set(now_))}
+
+
+def _upward(start: str, parents: dict[str, set[str]]) -> set[str]:
+    out, todo = {start}, [start]
+    while todo:
+        for q in parents.get(todo.pop(), ()):
+            if q not in out:
+                out.add(q)
+                todo.append(q)
+    return out
+
+
 def _relation_items(run: Run, docs: dict[str, dict]) -> list[dict]:
-    """The relations of the shared levels, each with whether the concepts behind its ends are related."""
-    behind: dict[str, set[tuple[str, str]]] = {}
-    pairs: set[tuple[str, str, str]] = set()
+    """The relations of the shared levels, each with whether a project relation stands behind it.
+
+    A project relation `x --t--> y` is a counterpart of the shared relation `A --t--> B` when it has the same type
+    `t`, goes in the same direction, and `x` stands for `A` and `y` for `B`. A project concept stands for a shared
+    concept that it, or a project concept it is narrower than (`broader`, any number of steps), maps to, and for
+    every shared concept that one specializes in turn (`broader`, or a `specialization` mapping between shared
+    concepts, any number of steps): a relation between narrower concepts instantiates the relation between the
+    wider ones, never the reverse. A project end written as a shared reference stands for it directly."""
+    sfiles = shared_files(run.cfg)
+    shared_up: dict[str, set[str]] = {}
+    for lv, f in sfiles.items():
+        for c in json.loads(f.read_text()).get("concepts", []):
+            ref = f"{lv}:{c['id']}"
+            ups = shared_up.setdefault(ref, set())
+            ups |= {_ref(lv, b) for b in c.get("broader", [])}
+            ups |= {m["target"] for m in c.get("maps_to", []) if m.get("target") and m.get("kind") == "specialization"}
+    edges: list[tuple[str, str, str, str, set[str], set[str]]] = []
     for p, d in docs.items():
-        for pc in d["concepts"]:
-            for m in pc.get("maps_to", []):
-                if m.get("target"):
-                    behind.setdefault(m["target"], set()).add((p, pc["id"]))
+        parents = {pc["id"]: set(pc.get("broader", [])) for pc in d["concepts"]}
+        maps = {pc["id"]: {m["target"] for m in pc.get("maps_to", []) if m.get("target")} for pc in d["concepts"]}
+        memo: dict[str, set[str]] = {}
+
+        def stands(x: str) -> set[str]:
+            if x not in memo:
+                direct = {x} if x in shared_up else set().union(*(maps.get(y, set()) for y in _upward(x, parents)))
+                memo[x] = set().union(set(), *(_upward(t, shared_up) for t in direct))
+            return memo[x]
         for r in d.get("relations", []):
-            pairs.add((p, r["from"], r["to"]))
+            edges.append((p, r["from"], r["type"], r["to"], stands(r["from"]), stands(r["to"])))
     out = []
-    for lv, f in shared_files(run.cfg).items():
+    for lv, f in sfiles.items():
         for r in json.loads(f.read_text()).get("relations", []):
             a, b = _ref(lv, r["from"]), _ref(lv, r["to"])
-            seen = any((p, x, y) in pairs or (p, y, x) in pairs
-                       for p, x in behind.get(a, ()) for q, y in behind.get(b, ()) if p == q)
+            seen = any(t == r["type"] and a in sa and b in sb for _, _, t, _, sa, sb in edges)
             item = {"ref": f"{a}--{r['type']}--{b}", "from": a, "type": r["type"], "to": b, "label": r.get("label"),
                     "counterpart": seen, "verdict": None, "comment": None}
+            if not seen:
+                other = sorted({f"{p}: {x} --{t}--> {y}" for p, x, t, y, sa, sb in edges
+                                if (a in sa and b in sb) or (b in sa and a in sb)})
+                if other:
+                    item["counterpart_other"] = other
             item["fingerprint"] = _fingerprint(item)
             out.append(item)
     return out
@@ -211,15 +338,14 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
                     unconfirmed += 1
                 else:
                     c["status"] = "asserted"
-                remark = f"Review ({by}, {run.id}): {i['comment']}"
-                if i.get("comment") and not i.get("carried_from") and remark not in c.get("note", ""):
-                    c["note"] = (c.get("note", "") + " " + remark).strip()
+                if i.get("comment") and not is_carried(i):   # a carried comment reached the note in its own run
+                    _note(c, f"Review ({by}, {run.id}): {i['comment']}")
             elif i["verdict"] == "reject":
                 rejected.add(ref)
                 continue
             else:
                 c["status"] = "hypothesis"
-                c["note"] = (c.get("note", "") + f" Review ({by}, {run.id}): {i['comment']}").strip()
+                _note(c, f"Review ({by}, {run.id}): {i['comment']}")
             e = held.get(ref)
             if carry_dispute(c, e):
                 disputed += 1
@@ -252,12 +378,21 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
         if ch:
             save_json(f, d)
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
-    carried = sum(1 for i in items + relations if i.get("carried_from"))
+    carried = sum(1 for i in items + relations if is_carried(i))
+    changed = sum(1 for i in items if i.get("support_changed"))
     note = f"run {run.id}" + (f"; reviewer effort {effort}" if effort else "") \
-        + (f"; {carried} verdicts carried from an earlier review" if carried else "")
+        + (f"; {carried} verdicts carried from an earlier review" if carried else "") \
+        + (f"; {changed} verdicts kept although their support changed" if changed else "")
     entry = framing.approve(run.cfg, "review", p, by=by, at=now(), note=note, covers=covers)
-    return {**counts, "accepted_unconfirmed": unconfirmed, "disputed": disputed, "one_sided": one_sided, "mappings_removed": unbound, "gate": entry,
-            "relations_rejected": len(gone_rel), "carried": carried}
+    return {**counts, "accepted_unconfirmed": unconfirmed, "disputed": disputed, "one_sided": one_sided,
+            "mappings_removed": unbound, "gate": entry, "relations_rejected": len(gone_rel), "carried": carried,
+            "support_changed": changed}
+
+
+def _note(c: dict, remark: str) -> None:
+    """Append a review remark to a concept's note once: applying the same review again adds nothing."""
+    if remark not in c.get("note", ""):
+        c["note"] = (c.get("note", "") + " " + remark).strip()
 
 
 def require_review(cfg) -> tuple[bool, str]:

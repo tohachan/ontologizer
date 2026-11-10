@@ -403,8 +403,14 @@ def cmd_review(args) -> int:
     if args.action == "build":
         d = review.build(run, _frame(run.cfg), since=args.since)
         print(f"review: {d['items']} shared concepts, {d['relations']} relations in {d['path']}; {d['open']} need a "
-              f"verdict ({d['kept']} kept, {d['carried']} carried from {args.since or 'no earlier run'}); "
-              f"a strong agent gives them")
+              f"verdict ({d['kept']} kept, {d['carried']} carried from {args.since or 'no earlier run'}"
+              + (f", {d['reopened']} reopened" if d.get("reopened") else "") + "); a strong agent gives them")
+        if d.get("support_changed"):
+            print(f"review: {len(d['support_changed'])} verdict(s) kept although their support changed; look at "
+                  f"each and delete `support_changed` once it is checked:")
+            for x in d["support_changed"]:
+                print(f"  {x['ref']}: " + "; ".join(
+                    f"{k} {', '.join(x[k])}" for k in ("added", "removed") if x[k]))
         return 0
     if not args.by:
         print("review apply needs --by NAME (the reviewing agent's model, e.g. claude-opus-5-5, or a person)",
@@ -413,7 +419,9 @@ def cmd_review(args) -> int:
     d = review.apply(run, args.by, effort=args.effort)
     print(f"review: {d['accept']} accepted ({d['accept'] - d.get('accepted_unconfirmed', 0)} asserted, {d.get('accepted_unconfirmed', 0)} unconfirmed stay hypotheses), {d['reject']} rejected, {d['revise']} to revise; "
           f"{d.get('disputed', 0)} disputed, {d['mappings_removed']} project mappings removed, {d['relations_rejected']} relations rejected, "
-          f"{d['carried']} verdicts carried; gate recorded")
+          f"{d['carried']} verdicts carried"
+          + (f", {d['support_changed']} kept although their support changed" if d.get("support_changed") else "")
+          + "; gate recorded")
     if d.get("one_sided"):
         print(f"not marked disputed, only one project concept stands behind them: {', '.join(d['one_sided'])}")
     return 0
