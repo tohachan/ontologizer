@@ -4,8 +4,10 @@ Used only when a config names `decisions: {adapter: jev}`; it needs an OpenRoute
 
 Config: `decisions: {adapter: jev, model: typesafe/jev-1.13, env: OPENROUTER_API_KEY, dotenv: .env}`.
 The key is read from the environment, else from the `.env` named by `dotenv`
-(relative to the owner config, then the kit's checkout). It is never printed,
-logged or put into an error message.
+(relative to the owner config), else from `.env` beside the owner config, then
+in the kit's checkout. In a linked git worktree each file is also looked for at
+the same place in the main checkout, as `scripts/oo` does (core/envfile.py). It
+is never printed, logged or put into an error message.
 
 Wire format (OpenRouter Decisions, alpha): POST {base}/decisions with
 {model, state, questions: {id: {type: noul|choice|score, instructions, criteria}}};
@@ -15,7 +17,6 @@ answers {id: {type, noul | choice+probabilities | score+probabilities, confidenc
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.error
 import urllib.request
@@ -27,14 +28,8 @@ BASE = "https://openrouter.ai/api/alpha"
 
 
 def _read_key(env: str, dotenv: list[Path]) -> str | None:
-    if os.environ.get(env):
-        return os.environ[env]
-    for p in dotenv:
-        if p.is_file():
-            for line in p.read_text().splitlines():
-                if line.startswith(f"{env}="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'") or None
-    return None
+    from ontologizer.core.envfile import read_key
+    return read_key(env, dotenv)
 
 
 def wire_question(q: Question) -> dict:
@@ -96,7 +91,8 @@ class Jev:
 
     def decide(self, state, questions: list[Question]) -> tuple[list[Answer], Receipt]:
         if not self._key:
-            raise RuntimeError(f"jev: no API key: set {self._env} in the environment or .env")
+            raise RuntimeError(f"jev: no API key: set {self._env} in the environment or .env "
+                               f"(the owner's or the kit's; in a git worktree, also the main checkout's)")
         body = {"model": self.model, "state": state,
                 "questions": {q.id: wire_question(q) for q in questions}}
         req = urllib.request.Request(f"{self.base_url}/decisions", data=json.dumps(body).encode(),

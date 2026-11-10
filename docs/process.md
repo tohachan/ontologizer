@@ -116,7 +116,7 @@ Concepts without a mapping are grouped by meaning. Code proposes candidate pairs
 
 A shared concept needs support from **at least two architectural families** of the frame. Two projects from one family count once.
 
-Two things are kept apart: *admission* (may a concept enter the shared levels) and *confirmation* (do independent families stand behind it, the preset's `domain_confirmation_min_projects`). By default they are the same number. A frame can lower admission (`admission_families: 1`) when there may be only one source. Then a concept without confirmation is marked `unconfirmed` in stage 7, and an `accept` in stage 8 leaves it a `hypothesis`. Every concept of the source is then a candidate, including those in `singletons`, and the Opus agent still decides which to take and why. Families count origins: a retelling of a source belongs to the source's family.
+Two things are kept apart: *admission* (may a concept enter the shared levels) and *confirmation* (do independent families stand behind it, the preset's `domain_confirmation_min_projects`). By default they are the same number. A frame can lower admission (`admission_families: 1`) when there may be only one source. Then a concept without confirmation is marked `unconfirmed` in stage 7, and an `accept` in stage 8 leaves it a `hypothesis`. `ontologizer group` counts the groups in these terms: admissible (at least `admission_families`) and, when it differs, confirmed (at least the confirmation number); when the frame has fewer families than confirmation needs, it says that no group can be confirmed. Every concept of the source is then a candidate, including those in `singletons`, and the Opus agent still decides which to take and why. Families count origins: a retelling of a source belongs to the source's family.
 
 A decision file adds to the decisions before it, so a later run lists only what changes:
 - a concept named again replaces its earlier form, and a concept decided on the other level moves there, with the mappings to it;
@@ -198,13 +198,22 @@ A new family means a new frame, so its approval is asked for again.
 
 **The checks.** Before a release, `ontologizer update-check <base release> --base-run <the run that built it>` holds the working levels to the release. It needs no new source. It blocks on:
 - a concept removed, or a relation gone, with no recorded reason;
-- a changed concept that none of its cited passages supports, judged through the decision port at the cited commits;
-- a competency question that lost its answer since the base run. Give questions a `query:`, so this does not rest on hand-written answers;
-- a new clash, or a report older than the shared levels.
+- a changed concept that none of its judged cited passages supports, judged through the decision port at the cited commits;
+- a competency question that lost its answer since the base run, unless the downgrade is recorded with a reason (below). Give questions a `query:`, so this does not rest on hand-written answers;
+- a new clash, or a report older than the shared levels or the run's `cq.yaml`.
+
+**A reasoned downgrade.** A hand-written status that was overstated in the base run should be lowered, not kept to pass the check. In the run's `cq.yaml` the question then carries `downgrade: {from: <the base run's status>, reason: <why it no longer holds>}`, e.g. `cq3: {status: partial, by: [...], downgrade: {from: answered, reason: "the earlier answer named a concept the sources do not define"}}`. `report` refuses a `downgrade` whose `from` is not above the new status or that has no reason. `update-check` lists the question under *Questions downgraded with a reason* instead of blocking, when `from` is the base run's status. A downgrade without a reason, or from another status, still blocks. A question answered by its `query:` takes its status from the store, so a `downgrade` does not apply to it.
+
+**The evidence share is reported, not a blocker.** For a changed or moved concept, the cited passages are the lines of every project concept mapped to it, under any mapping kind, and the decision port judges each against the new definition. The share of supporting passages mixes counterparts: the lines of a `specialization` or `partial` counterpart need not carry the whole shared definition, so a share below 1 is not a defect by itself, and a blocker on it would refuse a sound generalization. When no judged passage supports the change, nothing behind the concept says what it now says, and that blocks. Below `process.update_check_min_share` (default 0.5), the report gives a warning that names each passage that does not support the change (path, lines, project concept, mapping kind), to be read before the release. Passages that cannot be read at their commit, or that the decision port did not answer, are warnings too.
 
 The result is `runs/<run>/update-check.{json,md}` and a recorded gate. With `process.update_check: true`, `release` of a level with an earlier release requires that gate, clean, over the files as they are; `--unreviewed` overrides it and is recorded. `release-compare <base> working` compares by meaning before the release, for concepts renamed or split.
 
-Then `review build --since <base run>` and the review of what changed, as in §8.
+Then `review build --since <base run>` and the review of what changed, as in §8. `review apply` writes into the shared-level files (statuses, review notes, rejected concepts and relations removed), so the update-check gate recorded before it no longer covers them, and `review apply` says so. The gate is not carried over such a change: a rejection removes concepts and relations, which is what the check must see. The order before a release is therefore:
+
+1. `update-check` to find what blocks, and fix it;
+2. `review build --since <base run>`, the review, `review apply`;
+3. `report`, then `update-check` again, over the files as the review left them;
+4. the owner's `release`.
 
 **Foreign ontologies.** `import-graph` refuses a file with none of the kit's vocabulary in a graph with a role: the kit would see nothing there, and the write would replace the graph. To analyse such a file, make it a source as above. To keep it verbatim, import it into a graph with no role.
 

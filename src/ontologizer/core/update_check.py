@@ -11,10 +11,13 @@ Nothing here needs a new source: it holds the working levels to what was already
 
 Readings that hold a shared concept apart (`shared.disputes`) do not block: they are listed, and `review apply`
 marks the concept `disputed`.
+A hand-written competency-question status lowered on purpose carries `downgrade: {from, reason}` in the
+run's `cq.yaml`; it is reported with its reason instead of blocking. A changed concept whose cited passages
+support it only in part is a warning naming the passages, not a blocker (`_evidence_findings`).
 
 The result is `runs/<run>/update-check.{json,md}` and a recorded gate. With `process.update_check: true`,
 `release` of a level that has an earlier release requires that gate, with nothing blocking, over the
-files as they are.
+files as they are: any later change to them, a `review apply` included, means running it again.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from ontologizer.ports.decisions import Question
 OK = Namespace("urn:ontologizer:kit:")
 RANK = {"answered": 2, "partial": 1}
 COMPARED = ("label", "definition", "upper_category")
+MIN_SHARE = 0.5   # `process.update_check_min_share`: below it, a changed concept's supporting share is a warning
 
 
 class UpdateCheckError(ValueError):
@@ -91,33 +95,85 @@ def _evidence_check(run: Run, frame: Frame, changed: list[str], working: dict[st
     thr = run.threshold("support")
     out = {}
     for ref in changed:
-        texts = []
+        texts, unreadable = [], []
         for p, d in docs.items():
             root = Path(src.source_dir(p)) if src else None
             commit0 = (d.get("source") or {}).get("commit")
             for pc in d["concepts"]:
-                if not any(m.get("target") == ref for m in pc.get("maps_to", [])):
+                kind = next((m.get("kind") for m in pc.get("maps_to", []) if m.get("target") == ref), False)
+                if kind is False:
                     continue
                 for e in pc.get("evidence", []):
                     if e.get("kind") in ("graph", "plan"):
                         continue
+                    where = {"project": p, "concept": pc["id"], "mapping": kind, "path": e["path"], "lines": e.get("lines")}
                     t = read_at(root, e.get("commit") or commit0, e["path"], e.get("lines"))
                     if t and t is not UNKNOWN_COMMIT:
-                        texts.append({"path": e["path"], "lines": e.get("lines"), "text": t, "project": p})
+                        texts.append({**where, "text": t})
+                    else:
+                        unreadable.append(where)
         c = working[ref]
-        row = {"evidence": len(texts), "supported": None}
+        passages = [{k: v for k, v in t.items() if k != "text"} for t in texts]
+        row = {"evidence": len(texts), "judged": None, "supported": None, "passages": passages, "unreadable": unreadable}
         if texts and dec.on:
             state = {"claim": f"Concept '{c['label']}': {c['definition']}",
-                     "evidence": [{"n": k, **t} for k, t in enumerate(texts)]}
+                     "evidence": [{"n": k, **{x: t[x] for x in ("path", "lines", "text", "project")}}
+                                  for k, t in enumerate(texts)]}
             qs = [Question(f"e{k}", "noul", instructions=f"Do the lines of evidence n={k} support the claim? Answer "
                                                          f"by what the lines show, not by plausibility.")
                   for k in range(len(texts))]
             ans = dec.ask(state, qs)
-            row["supported"] = sum(1 for k in range(len(texts)) if (a := ans.get(f"e{k}")) is not None and a.ok
-                                   and a.value >= thr)
+            for k, ps in enumerate(passages):
+                a = ans.get(f"e{k}")
+                ps["verdict"] = "not judged" if a is None or not a.ok else \
+                    ("supports" if a.value >= thr else "does not support")
+            row["judged"] = sum(1 for ps in passages if ps["verdict"] != "not judged")
+            row["supported"] = sum(1 for ps in passages if ps["verdict"] == "supports")
         out[ref] = row
     dec.done()
     return out
+
+
+def _evidence_findings(ev: dict[str, dict], min_share: float) -> tuple[list[str], list[str]]:
+    """What the evidence of the changed concepts says: (blocking, warnings).
+
+    The passages behind a shared concept are those of every project concept mapped to it, under any mapping
+    kind: a narrower (`specialization`) or `partial` counterpart's lines need not carry the whole shared
+    definition, so a share below 1 is not a defect by itself and does not block. It is reported, with the
+    passages that do not support the change, when it falls below `min_share`. A changed concept that no
+    judged passage supports blocks: nothing behind it says what it now says.
+    """
+    blocking, warnings = [], []
+    for ref, row in ev.items():
+        n, judged, sup = row["evidence"], row.get("judged"), row["supported"]
+        if row.get("unreadable"):
+            warnings.append(f"{ref}: {len(row['unreadable'])} cited passage(s) could not be read at their commit: "
+                            + _where(row["unreadable"]))
+        if n == 0:
+            warnings.append(f"{ref}: changed, with no cited passage to check it against")
+            continue
+        if sup is None:
+            continue                                  # decisions off: not judged, said in the table
+        if judged == 0:
+            warnings.append(f"{ref}: none of its {n} cited passages could be judged (decision errors); run again")
+            continue
+        if sup == 0:
+            of = f"its {n} cited passages" if judged == n else f"the {judged} judged of its {n} cited passages"
+            blocking.append(f"{ref}: changed, and none of {of} supports it")
+            continue
+        if judged < n:
+            warnings.append(f"{ref}: {n - judged} of {n} cited passages not judged (decision errors): "
+                            + _where([p for p in row["passages"] if p.get("verdict") == "not judged"]))
+        if sup / judged < min_share:
+            warnings.append(f"{ref}: {sup} of {judged} judged passages support the changed definition "
+                            f"(below {min_share:g}); not supporting: "
+                            + _where([p for p in row["passages"] if p.get("verdict") == "does not support"]))
+    return blocking, warnings
+
+
+def _where(ps: list[dict]) -> str:
+    return "; ".join(f"{p['path']}" + (f":{p['lines']}" if p.get("lines") else "")
+                     + f" ({p['project']}:{p['concept']}, {p.get('mapping') or 'mapping kind not stated'})" for p in ps)
 
 
 def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
@@ -160,18 +216,19 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
 
     to_check = changed + [m["to"] for m in moved]
     ev = _evidence_check(run, frame, to_check, working)
-    for ref, row in ev.items():
-        if row["supported"] == 0:
-            blocking.append(f"{ref}: changed, and none of its {row['evidence']} cited passages supports it")
+    min_share = float(run.process.get("update_check_min_share", MIN_SHARE))
+    ev_block, warnings = _evidence_findings(ev, min_share)
+    blocking += ev_block
 
     report = load_json(run.path("report.json"))
     base_report = load_json(run.cfg.root / (run.cfg.data.get("process") or {}).get("runs", "runs") / base_run / "report.json")
-    cq_lost = []
+    cq_lost, cq_down = [], []
     if report is None:
         blocking.append(f"no report for run {run.id}: run `ontologizer report`")
     else:
         rp = run.path("report.json")
-        stale = [f.name for f in shared_files(run.cfg).values() if f.stat().st_mtime > rp.stat().st_mtime]
+        inputs = list(shared_files(run.cfg).values()) + [f for f in [run.path("cq.yaml")] if f.is_file()]
+        stale = [f.name for f in inputs if f.stat().st_mtime > rp.stat().st_mtime]
         if stale:
             blocking.append(f"the report is older than {stale}: run `ontologizer report` again")
     if base_report is None:
@@ -186,8 +243,19 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
             if is_ is None:
                 cq_lost.append({"id": q["id"], "was": q["status"], "now": "no longer in the frame"})
             elif RANK.get(is_.get("status"), 0) < was:
-                cq_lost.append({"id": q["id"], "was": q["status"], "now": is_.get("status")})
-        blocking += [f"question {x['id']}: was {x['was']}, now {x['now']}" for x in cq_lost]
+                row = {"id": q["id"], "was": q["status"], "now": is_.get("status")}
+                dg = is_.get("downgrade") or {}
+                if dg.get("from") == q["status"] and str(dg.get("reason") or "").strip():
+                    cq_down.append({**row, "reason": dg["reason"]})   # lowered on purpose, with the owner's reason
+                    continue
+                if dg:
+                    row["hint"] = f"the downgrade in cq.yaml is from {dg.get('from')}, not {q['status']}"
+                elif is_.get("how") not in ("query", "onto_cq_run"):
+                    row["hint"] = "if the earlier hand-written status was overstated, record " \
+                                  "`downgrade: {from, reason}` in cq.yaml"
+                cq_lost.append(row)
+        blocking += [f"question {x['id']}: was {x['was']}, now {x['now']}" + (f" ({x['hint']})" if x.get("hint") else "")
+                     for x in cq_lost]
         a, b = (base_report.get("metrics") or {}).get("consistency_clashes"), (report.get("metrics") or {}).get("consistency_clashes")
         if b is not None and b > (a or 0):
             blocking.append(f"the reasoner finds {b} clash(es), {a or 0} in the base run")
@@ -198,7 +266,8 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
     doc = {"run": run.id, "at": now(), "base": base, "base_run": base_run, "mode": run.mode("verify"),
            "kept": len(kept), "changed": changed, "moved": moved, "added": added, "removed": removed,
-           "relations_gone": rel_gone, "evidence": ev, "questions_lost": cq_lost, "disputes": open_disputes, "blocking": blocking}
+           "relations_gone": rel_gone, "evidence": ev, "min_share": min_share, "questions_lost": cq_lost,
+           "questions_downgraded": cq_down, "disputes": open_disputes, "warnings": warnings, "blocking": blocking}
     save_json(run.path("update-check.json"), doc)
     run.path("update-check.md").write_text(render(doc))
     framing.record(run.cfg, {"gate": "update-check", "file": str(run.path("update-check.json").relative_to(run.cfg.root)),
@@ -215,10 +284,22 @@ def render(d: dict) -> str:
         lines += ["## Blocking", ""] + [f"- {x}" for x in d["blocking"]] + [""]
     else:
         lines += ["Nothing blocks the release.", ""]
+    if d.get("warnings"):
+        lines += ["## Warnings", "", "Reported, not blocking: read the passages named and decide.", ""] \
+            + [f"- {x}" for x in d["warnings"]] + [""]
+    if d.get("questions_downgraded"):
+        lines += ["## Questions downgraded with a reason", ""] \
+            + [f"- {x['id']}: was {x['was']}, now {x['now']}: {x['reason']}" for x in d["questions_downgraded"]] + [""]
     if d["changed"] or d["moved"]:
-        lines += ["## Changed and moved", "", "| Concept | Cited passages | Supporting |", "| --- | --- | --- |"]
+        lines += ["## Changed and moved", "",
+                  "Cited passages: the lines of every project concept mapped to the concept, under any mapping kind. "
+                  "Supporting: those the decision port judges to support the changed definition.", "",
+                  "| Concept | Cited passages | Judged | Supporting | Share |", "| --- | --- | --- | --- | --- |"]
         for r, row in d["evidence"].items():
-            lines.append(f"| `{r}` | {row['evidence']} | {'not judged' if row['supported'] is None else row['supported']} |")
+            sup, judged = row["supported"], row.get("judged", row["evidence"] if row["supported"] is not None else None)
+            share = f"{sup / judged:.2f}" if sup is not None and judged else "—"
+            lines.append(f"| `{r}` | {row['evidence']} | {'—' if judged is None else judged} | "
+                         f"{'not judged' if sup is None else sup} | {share} |")
         lines.append("")
     if d["removed"]:
         lines += ["## Removed", ""] + [f"- `{x['ref']}` {x['label']}: {x['reason'] or 'no reason recorded'}"
@@ -249,8 +330,21 @@ def require_update_check(cfg, engine) -> tuple[bool, str]:
     last = hits[-1]
     if last.get("blocking"):
         return False, f"the update check against @{last['base']} has {last['blocking']} blocking item(s): {last['file']}"
-    for rel, h in (last.get("covers") or {}).items():
-        f = cfg.root / rel
-        if not f.is_file() or framing.sha256(f) != h:
-            return False, f"{rel} changed after the update check; run it again"
+    changed = changed_since_check(cfg)
+    if changed:
+        return False, (f"{', '.join(changed)} changed after the update check (a `review apply` changes them too); "
+                       f"run `ontologizer report`, then `ontologizer update-check {last['base']} --base-run "
+                       f"{last['base_run']}` again")
     return True, f"update check against @{last['base']} is clean"
+
+
+def changed_since_check(cfg) -> list[str]:
+    """The files the last update-check gate covers that are missing or differ now; [] without such a gate.
+
+    Any change counts, notes included: a `review apply` also sets statuses and removes rejected concepts and
+    relations, which the check must see, so the gate is never carried over a change it did not read."""
+    hits = [g for g in framing.gates(cfg) if g.get("gate") == "update-check"]
+    if not hits:
+        return []
+    return [rel for rel, h in (hits[-1].get("covers") or {}).items()
+            if not (cfg.root / rel).is_file() or framing.sha256(cfg.root / rel) != h]

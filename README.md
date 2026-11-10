@@ -229,7 +229,7 @@ Narrow decisions (same concept? which category? do these lines support the claim
 
 ### A topic that grows from any sources
 
-An ontology need not start from a corpus of code. A topic can start from one description, model or set of notes, and improve with each new source or correction: `admission_families: 1` in the frame lets a concept enter the shared levels from one source, and it stays a hypothesis until an independent source confirms it. Each update is a new run, held to the last release by `update-check` (blocks on removals without a reason, a changed concept its evidence does not support, a question that lost its answer, a new clash), which needs no new source. Set `process.update_check: true` to make `release` require it. Details: [`docs/process.md`](docs/process.md) §10.
+An ontology need not start from a corpus of code. A topic can start from one description, model or set of notes, and improve with each new source or correction: `admission_families: 1` in the frame lets a concept enter the shared levels from one source, and it stays a hypothesis until an independent source confirms it. Each update is a new run, held to the last release by `update-check` (blocks on removals without a reason, a changed concept its evidence does not support, a question that lost its answer without a recorded downgrade, a new clash; warns on a changed concept its evidence supports only in part), which needs no new source. Set `process.update_check: true` to make `release` require it. Details: [`docs/process.md`](docs/process.md) §10.
 
 ### Adapters
 
@@ -242,7 +242,7 @@ Built in (each is used only when a config names it; none needs a package beyond 
 | evidence | `checkout` | plain git checkouts `<root>/<repo>` | `evidence: [{adapter: checkout, root: ../sources}]` |
 | inventory | `graphify` | an existing Graphify `graph.json` per repository: type nodes and CLI entry points with file, line, module and degree | `inventory: {adapter: graphify, graphs: {acme: ../graphs/acme/graph.json}}` or `{adapter: graphify, pattern: ../graphs/{repo}/graph.json, metadata: ../graphs/{repo}/metadata.json}`; optional `max_candidates` |
 | inventory | `rdf` | the classes and SKOS concepts of an RDF file in a source checkout | `inventory: {adapter: rdf, root: ../sources, files: {acme: model.ttl}, format: turtle}`; `format` when the suffix does not tell it |
-| decisions | `jev` | Jev through OpenRouter's Decisions API (alpha) | `decisions: {adapter: jev, model: typesafe/jev-1.13}`; the key is `OPENROUTER_API_KEY` from the environment or `.env` (owner, then the kit), never printed |
+| decisions | `jev` | Jev through OpenRouter's Decisions API (alpha) | `decisions: {adapter: jev, model: typesafe/jev-1.13}`; the key is `OPENROUTER_API_KEY` from the environment or `.env` (owner, then the kit; in a git worktree without its own `.env`, the main checkout's, as for `scripts/oo`), never printed |
 
 **More adapters from a package.** The kit resolves names through entry points (`ontologizer.evidence`, `ontologizer.inventory`, `ontologizer.decisions`), so any installed package that declares them adds adapters without a change to the kit:
 

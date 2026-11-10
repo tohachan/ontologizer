@@ -79,8 +79,25 @@ def _check_cq(manual: dict, frame: Frame, path) -> None:
             errs.append(f"{k}: not a question of the frame ({sorted(ids)}); ids are top-level keys")
         elif v.get("status") not in CQ_STATUSES:
             errs.append(f"{k}.status: one of {CQ_STATUSES}")
+        elif "downgrade" in v:
+            errs += [f"{k}.downgrade: {e}" for e in _downgrade_errors(v["downgrade"], v["status"])]
     if errs:
         raise FrameError([f"{path}: {e}" for e in errs])
+
+
+def _downgrade_errors(d, status: str) -> list[str]:
+    """`downgrade: {from: <earlier status>, reason: <why the earlier status no longer holds>}`: a hand-written
+    status lowered on purpose (update-check reports it instead of blocking, docs/process.md §10)."""
+    if not isinstance(d, dict):
+        return ["a mapping {from: <earlier status>, reason: <text>}"]
+    errs = []
+    if d.get("from") not in CQ_STATUSES:
+        errs.append(f"from: one of {CQ_STATUSES}")
+    elif CQ_STATUSES.index(d["from"]) >= CQ_STATUSES.index(status):
+        errs.append(f"from: {d['from']} is not above the status {status}; a downgrade lowers it")
+    if not isinstance(d.get("reason"), str) or not d["reason"].strip():
+        errs.append("reason: say why the earlier status no longer holds")
+    return errs
 
 
 def _cq_status(run: Run, frame: Frame, engine=None) -> list[dict]:
@@ -106,6 +123,8 @@ def _cq_status(run: Run, frame: Frame, engine=None) -> list[dict]:
             m = manual.get(q["id"]) or {}
             st.update(status=m.get("status", "unassessed"), how=st.get("how", "manual" if m else "none"),
                       by=m.get("by", []), note=m.get("note"))
+            if m.get("downgrade"):
+                st["downgrade"] = {"from": m["downgrade"]["from"], "reason": m["downgrade"]["reason"].strip()}
         if q.get("target"):
             st["target"] = q["target"]
             st["projects"] = (manual.get(q["id"]) or {}).get("projects") or {}
@@ -369,7 +388,9 @@ def render(doc: dict) -> str:
                      f"{', '.join(s['projects'])} |")
     lines += ["", "## Competency questions", "", "| Id | Level | Status | Question |", "| --- | --- | --- | --- |"]
     for q in doc["competency_questions"]:
-        lines.append(f"| {q['id']} | {q['level']} | {q['status']} | {q['question']} |")
+        dg = q.get("downgrade")
+        status = f"{q['status']} (was {dg['from']}: {dg['reason']})" if dg else q["status"]
+        lines.append(f"| {q['id']} | {q['level']} | {status} | {q['question']} |")
     for tid, t in (doc.get("targets") or {}).items():
         ps = doc["projects"]
         lines += ["", f"## Target: {t['label']}", "", "| Requirement | " + " | ".join(ps) + " | Parts to reuse |",

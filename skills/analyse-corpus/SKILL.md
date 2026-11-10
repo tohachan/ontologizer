@@ -45,7 +45,7 @@ Run a stage in a second run directory with its mode set to `llm` or `off`: decla
 
 ## Updating an ontology (stage 10)
 
-A new source or a correction is a new run with a new id, in `docs/process.md` §10. Run stages 1–4 for the source. Extraction stays blind to the ontology. Stage 5 lists only what changes. Then `stability`, `report`, `ontologizer update-check <base> --base-run <run>`, and resolve everything it blocks on, rather than passing `--unreviewed`. `review build --since <base run>`, the review of what changed, and the owner's release.
+A new source or a correction is a new run with a new id, in `docs/process.md` §10. Run stages 1–4 for the source. Extraction stays blind to the ontology. Stage 5 lists only what changes. Then `stability`, `report`, `ontologizer update-check <base> --base-run <run>`, and resolve everything it blocks on, rather than passing `--unreviewed`; a hand-written question status that was overstated is lowered with `downgrade: {from, reason}` in `cq.yaml`, never kept. Read its warnings. `review build --since <base run>`, the review of what changed, `review apply`; then `report` and `update-check` again, since `review apply` changes the shared files; then the owner's release.
 
 ## Rules
 

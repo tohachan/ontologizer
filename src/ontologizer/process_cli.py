@@ -231,7 +231,7 @@ def cmd_map(args) -> int:
 # ---- stage 5 ---------------------------------------------------------------------
 @_errors
 def cmd_group(args) -> int:
-    from ontologizer.core.grouping import build
+    from ontologizer.core.grouping import build, summary
     run = _run(args)
     why = _not_overlay(run, "stage 5 (group)")
     if why:
@@ -239,9 +239,8 @@ def cmd_group(args) -> int:
         return 2
     fr = _frame(run.cfg)
     d = build(run, fr)
-    elig = sum(1 for g in d["groups"] if g["eligible"])
     print(f"group: {d['unmapped']} unmapped concepts, {d['pairs_judged']} pairs judged (mode {d['mode']}), "
-          f"{len(d['groups'])} groups, {elig} with ≥2 families → {run.path('consolidate', 'groups.json')}. "
+          f"{summary(d)} → {run.path('consolidate', 'groups.json')}. "
           f"Decisions go to consolidation/{run.id}.yaml (skill analyse-corpus, stage 5).")
     return 0
 
@@ -357,7 +356,8 @@ def cmd_update_check(args) -> int:
         print(str(e), file=sys.stderr)
         return 2
     print(f"update-check @{args.base}: {d['kept']} kept, {len(d['changed'])} changed, {len(d['moved'])} moved, "
-          f"{len(d['added'])} added, {len(d['removed'])} removed; {len(d['blocking'])} blocking → "
+          f"{len(d['added'])} added, {len(d['removed'])} removed; {len(d['blocking'])} blocking, "
+          f"{len(d['warnings'])} warning(s), {len(d['questions_downgraded'])} question(s) downgraded with a reason → "
           f"{run.path('update-check.md')}")
     for x in d["blocking"]:
         print(f"- {x}")
@@ -424,6 +424,12 @@ def cmd_review(args) -> int:
           + "; gate recorded")
     if d.get("one_sided"):
         print(f"not marked disputed, only one project concept stands behind them: {', '.join(d['one_sided'])}")
+    from ontologizer.core.update_check import changed_since_check
+    stale = changed_since_check(run.cfg) if (run.cfg.data.get("process") or {}).get("update_check") else []
+    if stale:
+        print(f"review apply changed {', '.join(stale)} after the update check, so `release` no longer accepts that "
+              f"check: run `ontologizer report`, then `ontologizer update-check` again before `release` "
+              f"(docs/process.md §10)")
     return 0
 
 
