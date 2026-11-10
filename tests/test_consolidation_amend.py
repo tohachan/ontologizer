@@ -110,3 +110,7 @@ def test_a_settlement_left_without_its_mapping_is_reported(study, tmp_path, caps
                                    "reason": "not a reading of it"}]}) == 0
     err = capsys.readouterr().err
     assert "settled alpha:gate -> domain:session (b.yaml) settles nothing: no such mapping any more" in err
+    assert decide("d", {"unsettled": [{"concept": "alpha:gate", "target": "domain:session"}]}) == 1   # no reason
+    assert decide("d", {"unsettled": [{"concept": "alpha:gate", "target": "domain:session",
+                                       "reason": "its mapping was removed in c.yaml"}]}) == 0
+    assert "settles nothing" not in capsys.readouterr().err

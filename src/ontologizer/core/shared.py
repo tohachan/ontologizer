@@ -129,6 +129,8 @@ def disputes(cfg: Config, docs: dict[str, dict]) -> dict[str, dict]:
                 settled[(x["concept"], x["target"])] = x["reason"]
             else:
                 declared.pop(x["target"], None)
+        for x in dec.get("unsettled") or []:     # a later file withdraws a settlement, with its reason
+            settled.pop((x.get("concept"), x.get("target")), None)
     out: dict[str, dict] = {}
 
     def entry(ref: str) -> dict:
@@ -159,7 +161,8 @@ def disputes(cfg: Config, docs: dict[str, dict]) -> dict[str, dict]:
 def stale_settlements(decisions_dir: Path, docs: dict[str, dict]) -> list[dict]:
     """`settled: [{concept, target, reason}]` entries that settle nothing any more: the project concept no longer
     maps onto the target, or the mapping is no longer partial and the concept no longer disputed. They do no harm,
-    but they read as if a reading were still open; a later decision file can say why it went."""
+    but they read as if a reading were still open; a later decision file withdraws one with
+    `unsettled: [{concept, target, reason}]`."""
     maps: dict[tuple[str, str], dict] = {}
     status: dict[str, str] = {}
     for project, d in docs.items():
@@ -168,20 +171,26 @@ def stale_settlements(decisions_dir: Path, docs: dict[str, dict]) -> list[dict]:
             for m in c.get("maps_to", []):
                 if m.get("target"):
                     maps[(f"{project}:{c['id']}", m["target"])] = m
-    out = []
+    found: dict[tuple[str, str], str] = {}
     for p in sorted(Path(decisions_dir).glob("*.yaml")):
         dec = yaml.safe_load(p.read_text()) or {}
         for x in dec.get("settled") or []:
-            if not x.get("concept") or x["concept"].split(":")[0] not in docs:
-                continue
-            m = maps.get((x["concept"], x["target"]))
-            if m is None:
-                why = "no such mapping any more"
-            elif m.get("kind") != "partial" and status.get(x["concept"]) != "disputed":
-                why = f"the mapping is now {m.get('kind')} and the concept not disputed"
-            else:
-                continue
-            out.append({"concept": x["concept"], "target": x["target"], "file": p.name, "why": why})
+            if x.get("concept"):
+                found[(x["concept"], x["target"])] = p.name
+        for x in dec.get("unsettled") or []:
+            found.pop((x.get("concept"), x.get("target")), None)
+    out = []
+    for (concept, target), name in found.items():
+        if concept.split(":")[0] not in docs:
+            continue
+        m = maps.get((concept, target))
+        if m is None:
+            why = "no such mapping any more"
+        elif m.get("kind") != "partial" and status.get(concept) != "disputed":
+            why = f"the mapping is now {m.get('kind')} and the concept not disputed"
+        else:
+            continue
+        out.append({"concept": concept, "target": target, "file": name, "why": why})
     return out
 
 

@@ -207,8 +207,8 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
 def _warn_stale_settlements(decisions_dir: Path, extractions: dict) -> None:
     from ontologizer.core.shared import stale_settlements
     for x in stale_settlements(decisions_dir, {p: d for p, (_, d) in extractions.items()}):
-        print(f"warning: settled {x['concept']} -> {x['target']} ({x['file']}) settles nothing: {x['why']}",
-              file=sys.stderr)
+        print(f"warning: settled {x['concept']} -> {x['target']} ({x['file']}) settles nothing: {x['why']}; "
+              f"withdraw it with `unsettled: [{{concept, target, reason}}]`", file=sys.stderr)
 
 
 def _support_mapping(c: dict, tgt: str, level: str, kind: str | None, how) -> int:
@@ -402,6 +402,9 @@ def _check_disputes(dec: dict, shared: dict, concepts: dict) -> list[str]:
             errs.append(f"disputed {x.get('ref')}: `reason` required")
         if x.get("ref") not in known:
             errs.append(f"disputed {x.get('ref')}: not a shared concept")
+    for x in dec.get("unsettled") or []:
+        if not (x.get("concept") and x.get("target") and str(x.get("reason", "")).strip()):
+            errs.append(f"unsettled {x.get('concept')}: `concept`, `target` and `reason` required")
     for x in dec.get("settled") or []:
         if not str(x.get("reason", "")).strip():
             errs.append(f"settled {x.get('concept') or x.get('target')}: `reason` required")
