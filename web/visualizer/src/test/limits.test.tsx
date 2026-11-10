@@ -68,3 +68,27 @@ it('the limits chosen in the panel go into the spec', async () => {
   fireEvent.click(screen.getByText('Show diagram'));
   await waitFor(() => expect(specs.at(-1)!.presentation).toMatchObject({ maxNodes: 200, maxEdges: 400 }));
 });
+
+it('a level selection over the limit is shown in part, with a way to show all', async () => {
+  mandatory = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    const path = decodeURIComponent(url.replace('/visualizer/api', ''));
+    const ok = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    if (path === '/catalog') return ok(catalog);
+    if (path === '/catalog?owner=study') return ok(ownerCatalog);
+    if (path === '/views?owner=study') return ok({ views: [] });
+    const spec = JSON.parse(init!.body as string).spec as ViewSpec;
+    specs.push(spec);
+    const c = compilation('c' + specs.length);
+    const max = spec.presentation.maxNodes;
+    c.diagram.counts = { ...c.diagram.counts, shownNodes: Math.min(max, 118), omittedNodes: Math.max(0, 118 - max) };
+    return ok(c);
+  }));
+  await byLevel();
+  const cut = await screen.findByLabelText('cut by the display limit');
+  expect(cut.textContent).toContain('Showing 80 of 118 nodes');
+  expect(screen.queryByRole('alert')).toBeNull();                       // a diagram, not an error
+  fireEvent.click(screen.getByText('Show all 118'));
+  await waitFor(() => expect(specs.at(-1)!.presentation.maxNodes).toBe(120));
+  await waitFor(() => expect(screen.queryByLabelText('cut by the display limit')).toBeNull());
+});

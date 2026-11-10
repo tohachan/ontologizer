@@ -276,3 +276,11 @@ def test_a_note_on_an_expanded_entity_counts_against_the_budget():
                           presentation={"maxNodes": 2}), scope(), model(CHAIN, CHAIN_RELS))
     assert len(d.nodes) <= 2 and d.counts.shown_nodes == len(d.nodes)
     assert d.counts.omitted_nodes == 1                                # B and its note would make three
+
+
+def test_a_level_selection_over_the_limit_is_cut_and_counted_not_refused():
+    many = [entity(f"L{i:03d}") for i in range(118)]
+    d = compile_view(spec(selection={"entities": [], "levels": ["domain"], "expansion": {"hops": 0, "direction": "both"}},
+                          presentation={"maxNodes": 80}), scope(), model(many, []))
+    assert d.counts.shown_nodes == 80 and d.counts.omitted_nodes == 38
+    assert iris(d) == sorted(e.iri for e in many)[:80]                # a fixed order: the same cut every time

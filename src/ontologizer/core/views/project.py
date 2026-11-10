@@ -128,9 +128,12 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
 
     # 2. seeds and mandatory entities
     seeds = [e for e in spec.entities if e in ents]
-    if not spec.entities:
+    by_level = not spec.entities
+    if by_level:
         seeds = [iri for iri, e in ents.items() if e.level in levels and not is_context(iri) and iri not in excluded]
-    mandatory = set(seeds)
+    # Concepts named in the spec must be shown. Concepts a level selects are a starting set, not a promise:
+    # past the display limit they are cut in a fixed order and counted as omitted.
+    mandatory = set() if by_level else set(seeds)
     for g in spec.groups:
         mandatory |= {m for m in g.members if m in ents}
     rels_by_id = {r.id: r for r in model.relationships}
@@ -152,7 +155,7 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
 
     # 3. expansion: breadth first, never through a context entity, never into an excluded one
     # Only seeds expand; the other mandatory elements join afterwards and do not block the walk.
-    hop = {e: 0 for e in sorted(seeds) if e in mandatory}
+    hop = {e: 0 for e in sorted(seeds) if e not in excluded}
     reached_by: dict[str, int] = {e: -1 for e in hop}
     excluded_seen: set[str] = set()
     filtered: set[str] = set()

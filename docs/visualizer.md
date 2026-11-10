@@ -335,7 +335,7 @@ A path summary is a visual abbreviation, not an inferred predicate. For example,
 
 When a group collapses, internal edges become an internal relationship count; external edges remain inspectable. Expanding it restores member placement where available. An edge hidden by a collapsed area is not reported as missing from the ontology.
 
-Mandatory seeds and user-defined groups must never be silently discarded by a display limit. If they alone exceed the budget, return a limit diagnostic without replacing the last valid diagram. Otherwise retain mandatory elements, then breadth-first additions ordered by hop, relation kind, and full IRI. Report shown, hidden-by-rule, and omitted-by-budget counts separately. Edges cannot reference absent displayed endpoints.
+Mandatory elements (the seeds the spec names, group members and summary ends) must never be silently discarded by a display limit. Concepts selected by a level are not mandatory: they are a starting set, cut past the limit in the order below and counted as omitted. If they alone exceed the budget, return a limit diagnostic without replacing the last valid diagram. Otherwise retain mandatory elements, then breadth-first additions ordered by hop, relation kind, and full IRI. Report shown, hidden-by-rule, and omitted-by-budget counts separately. Edges cannot reference absent displayed endpoints.
 
 A source snapshot overflow is an error. A display budget is a valid bounded view with explicit omissions. Keep these states distinct.
 

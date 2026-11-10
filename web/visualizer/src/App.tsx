@@ -265,6 +265,19 @@ export function App() {
       </div>}
       {notice && <div role="status" className="notice">{notice}</div>}
       {compilation?.diagnostics.length ? <div role="status" className="notice">{compilation.diagnostics.length} reference(s) no longer resolve: {compilation.diagnostics.map((d) => d.path).join(', ')}</div> : null}
+      {counts && counts.omittedNodes > 0 && (() => {
+        const total = counts.shownNodes + counts.omittedNodes;
+        const fits = NODE_LIMITS.find((n) => n >= total);
+        return (
+          <div role="status" className="notice" aria-label="cut by the display limit">
+            Showing {counts.shownNodes} of {total} nodes: the rest is over this view's limit of {sel.layout.maxNodes}.{' '}
+            {fits
+              ? <button type="button" disabled={busy} onClick={() => void apply({ ...sel, layout: { ...sel.layout, maxNodes: fits, maxEdges: Math.max(sel.layout.maxEdges, Math.min(400, 2 * fits)) } }, extra)}>
+                  Show all {total}</button>
+              : <>A view shows at most {MAX_NODES}; pick starting concepts or fewer graphs to see the rest.</>}
+          </div>
+        );
+      })()}
       {compilation?.changes && <Changes c={compilation.changes} />}
       {compilation?.manifest.missing.length ? <div role="status" className="notice">Missing graphs: {compilation.manifest.missing.join(', ')}</div> : null}
       <main>
