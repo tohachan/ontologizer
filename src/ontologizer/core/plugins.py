@@ -6,6 +6,7 @@ The kit names a port's adapter in the owner's config (`evidence:`, `inventory:`,
     ontologizer.evidence    → an EvidenceSource
     ontologizer.inventory   → an InventorySource
     ontologizer.decisions   → a DecisionAdapter
+    ontologizer.view_planner → a ViewPlanner (the visualizer's, from the hub's `visualizer.planner`)
 
 The kit registers its built-in adapters (standard library only: `checkout`,
 `graphify`, `jev`). Further adapters come from any installed package that
@@ -19,7 +20,7 @@ from __future__ import annotations
 from importlib.metadata import entry_points
 from pathlib import Path
 
-PORTS = ("evidence", "inventory", "decisions")
+PORTS = ("evidence", "inventory", "decisions", "view_planner")
 
 
 class PluginMissing(LookupError):

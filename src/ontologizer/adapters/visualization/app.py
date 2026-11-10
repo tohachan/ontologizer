@@ -28,11 +28,12 @@ from ontologizer.core.views.reader import choose_label, read_model
 from ontologizer.core.views.scope import OutOfScope, Owners, Scope, UnknownOwner, catalog, resolve
 from ontologizer.core.views.source import ScopedReader, ScopeTooLarge, Snapshot
 from ontologizer.core.views.spec import SpecError, ViewSpec, check, parse
+from ontologizer.core.views.plan import CatalogTooLarge, PlanInvalid, plan_view
 from ontologizer.core.views.storage import StorageError, ViewStore, baseline, diff, spec_of
 from ontologizer.ports.engine import EngineError, EngineUnavailable
+from ontologizer.ports.view_planner import CONTRACT_VERSION, PlannerError, ViewPlanner
 
 API = "/visualizer/api"
-PLANNER_CONTRACT = 1
 MAX_STATEMENTS = 200
 
 
@@ -103,6 +104,7 @@ class Visualizer:
     reader: ScopedReader
     settings: Settings
     clock: Callable[[], float] = time.monotonic
+    planner: ViewPlanner | None = None          # off unless the hub configures one
     snapshots: _Cache = field(init=False)
     compilations: _Cache = field(init=False)
     graph_list: _Cache = field(init=False)
@@ -180,7 +182,7 @@ class Visualizer:
             case ("PUT", ["views", vid]):
                 return 200, self.save(vid, payload)
             case ("POST", ["plan"]):
-                raise ApiError(501, "planner-disabled", "natural-language planning is turned off in this service")
+                return 200, self.plan(payload)
             case (_, ["health"] | ["catalog"] | ["search"] | ["compile"] | ["plan"] | ["views"] | ["views", _]):
                 raise ApiError(405, "method-not-allowed", f"{method} is not supported here")
         raise ApiError(404, "not-found", "no such endpoint")
@@ -261,7 +263,7 @@ class Visualizer:
         return {"status": "ok", "engine": engine}
 
     def catalog(self, owner) -> dict:
-        planner = {"enabled": False, "contractVersion": PLANNER_CONTRACT}
+        planner = {"enabled": self.planner is not None, "contractVersion": CONTRACT_VERSION}
         if owner is None:
             owners = []
             for name in self.owners.names():
@@ -360,6 +362,34 @@ class Visualizer:
             "sourceDiagnostics": len(model.diagnostics),
             "changes": changes,
         }
+
+    # ---- planning -------------------------------------------------------------------
+    def plan(self, body: dict) -> dict:
+        if self.planner is None:
+            raise ApiError(501, "planner-disabled", "natural-language planning is turned off in this service")
+        owner = body.get("owner")
+        cfg = self._config(owner)
+        text = body.get("request")
+        if not isinstance(text, str) or not 1 <= len(text.strip()) <= 2000:
+            raise ApiError(400, "bad-request", "request must be 1 to 2000 characters")
+        try:
+            current = parse(body.get("spec"))
+        except SpecError as e:
+            raise ApiError(422, "invalid-spec", "the current view specification is invalid", to_json(e.issues)) from None
+        scope = self._scope(cfg, current.primary_graphs, current.context_graphs)
+        snap, model = self._snapshot(scope, body.get("snapshotId"))
+        levels = tuple(Preset.load(cfg.preset_path).level_ids)
+        try:
+            result, repaired = plan_view(self.planner, cfg, catalog(cfg, self._graphs()), scope, model, text.strip(),
+                                         current.to_json(), current.languages, levels)
+        except CatalogTooLarge as e:
+            raise ApiError(413, "scope-too-large", str(e)) from None
+        except PlanInvalid as e:
+            raise ApiError(422, "plan-invalid", "the planner's proposal did not pass the checks", e.issues) from None
+        except PlannerError as e:
+            raise ApiError(502, "planner-failed", str(e)[:300]) from None
+        return {"snapshotId": snap.id, "spec": result.spec, "summary": result.summary,
+                "candidates": list(result.candidates), "repaired": repaired}
 
     # ---- saved views --------------------------------------------------------------
     def _store(self, owner) -> ViewStore:

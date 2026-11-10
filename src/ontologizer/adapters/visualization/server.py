@@ -19,6 +19,7 @@ from pathlib import Path
 
 from ontologizer.adapters.engine.open_ontologies import OpenOntologies
 from ontologizer.adapters.visualization.app import Settings, Visualizer, error_response
+from ontologizer.core import plugins
 from ontologizer.core.config import read_hub
 from ontologizer.core.views.scope import Owners
 from ontologizer.core.views.source import ScopedReader
@@ -31,11 +32,20 @@ def default_hub() -> Path:
 
 
 def build(hub: Path, host: str, port: int, allow_hosts=()) -> ThreadingHTTPServer:
-    url = (read_hub(hub).get("store") or {}).get("url")
+    hub_data = read_hub(hub)
+    url = (hub_data.get("store") or {}).get("url")
+    planner = None
+    conf = (hub_data.get("visualizer") or {}).get("planner")
+    if conf:
+        try:
+            planner = plugins.load("view_planner", dict(conf), base=hub)
+        except Exception as e:                     # the service runs without it rather than not at all
+            print(f"visualizer: planner {conf.get('adapter')!r} not loaded ({type(e).__name__}: {e}); it is off",
+                  file=sys.stderr)
     allowed = (f"127.0.0.1:{port}", f"localhost:{port}", *allow_hosts)
     static = Path(os.environ.get("VISUALIZER_STATIC") or KIT_ROOT / "web" / "visualizer" / "dist")
     app = Visualizer(Owners(hub), ScopedReader(OpenOntologies(url)),
-                     Settings(allowed_hosts=tuple(dict.fromkeys(allowed)), static_dir=static))
+                     Settings(allowed_hosts=tuple(dict.fromkeys(allowed)), static_dir=static), planner=planner)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ontologizer-visualizer"

@@ -57,6 +57,8 @@ def read_hub(hub_dir: Path) -> dict:
         data["projects"] = {**(data.get("projects") or {}), **(over.get("projects") or {})}
         if "store" in over:
             data["store"] = {**(data.get("store") or {}), **over["store"]}
+        if "visualizer" in over:                       # the planner and its provider are per machine
+            data["visualizer"] = {**(data.get("visualizer") or {}), **over["visualizer"]}
     return data
 
 

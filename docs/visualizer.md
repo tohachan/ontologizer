@@ -134,7 +134,7 @@ Use these proposed implementation locations:
 
 These are new modules. Do not introduce production imports from either checkout's `studio/` directory. Extract reusable exporter reading code into the kit and keep the Markdown export behavior covered by its existing tests.
 
-The HTTP adapter uses the standard library's server, like the kit's other adapters, so it needs no web framework and no installation extra; `ontologizer visualizer` starts it. Planner provider dependencies sit in a separate `planner` extra. The Python core must remain usable without a web framework, a browser bundle, or an LLM provider. Serve the browser and API from the same origin in the local application. Keep the Open Ontologies bearer token on the Python side and reuse the repository's configured token resolution.
+The HTTP adapter uses the standard library's server, like the kit's other adapters, so it needs no web framework and no installation extra; `ontologizer visualizer` starts it. A planner adapter that needs a provider library brings it in its own package; the built-in one needs none. The Python core must remain usable without a web framework, a browser bundle, or an LLM provider. Serve the browser and API from the same origin in the local application. Keep the Open Ontologies bearer token on the Python side and reuse the repository's configured token resolution.
 
 ## Scope and snapshot semantics
 
@@ -394,7 +394,7 @@ Manual annotations and grouping do not imply accepted ontology changes. Deleting
 The planner is a separate module so that it can be turned off or improved without touching the rest:
 
 - **Port.** `ViewPlanner` has a versioned contract. Its input is the contract version, the request text, a bounded catalog, and the current view. Its output is the contract version, a proposed ViewSpec, and a change summary, or a list of candidates when a name is ambiguous.
-- **Adapter.** Chosen by name in the config and resolved through the entry-point group `ontologizer.view_planner`, in the same way as the kit's other adapters (`core/plugins.py`). Provider dependencies sit in the `planner` extra.
+- **Adapter.** Chosen by name in the hub's `visualizer.planner` (usually in its `ontologizer.local.yaml`, since the provider and its key are per machine) and resolved through the entry-point group `ontologizer.view_planner`, in the same way as the kit's other adapters (`core/plugins.py`). The built-in `chat` adapter talks to any OpenAI-compatible endpoint with the standard library; the model must be named, none is assumed. Another adapter comes from any package that declares the entry point.
 - **Off by default.** With no planner configured nothing loads, no key is read, the catalog reports it unavailable, the UI hides the request input, and `/plan` answers `planner-disabled` with HTTP 501. The key, when there is one, is passed to the service only when the planner is on.
 - **Isolation.** Core and the API import only the port. Replacing the adapter touches neither. Tests and quality fixtures live in `tests/view_planner/`.
 

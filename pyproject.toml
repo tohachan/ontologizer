@@ -28,6 +28,9 @@ rdf = "ontologizer.adapters.inventory.rdf:factory"
 [project.entry-points."ontologizer.decisions"]
 jev = "ontologizer.adapters.decisions.jev:factory"
 
+[project.entry-points."ontologizer.view_planner"]
+chat = "ontologizer.adapters.view_planner.chat:factory"
+
 [build-system]
 requires = ["uv_build>=0.13.5,<0.14.0"]
 build-backend = "uv_build"

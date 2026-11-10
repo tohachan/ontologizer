@@ -7,7 +7,7 @@ import { Inspector } from './Inspector';
 import { Sidebar, type Selection } from './Sidebar';
 import * as ops from './ops';
 import { buildSpec, scopeKey } from './spec';
-import type { Artifact, Catalog, Compilation, Layout, OwnerCatalog, SavedView, SearchHit } from './types';
+import type { Artifact, Catalog, Compilation, Layout, OwnerCatalog, SavedView, SearchHit, ViewSpec } from './types';
 import { download, slug, Views } from './Views';
 
 const START: Selection = {
@@ -127,11 +127,7 @@ export function App() {
   // references the data no longer has are reported, not fatal, and changes since it was saved show.
   const openArtifact = useCallback(async (a: Artifact, savedId: string | null) => {
     const sp = a.spec;
-    const s: Selection = { ...START, primary: sp.scope.primaryGraphs, context: sp.scope.contextGraphs,
-      languages: sp.presentation.languages, seeds: sp.selection.entities.map((iri) => ({ iri, label: iri.split(/[#/:]/).pop() ?? iri })),
-      excluded: sp.selection.excludedEntities, levels: sp.selection.levels, kinds: sp.selection.relationKinds,
-      hops: sp.selection.expansion.hops, direction: sp.selection.expansion.direction };
-    const x: ops.Extra = { groups: sp.groups, summaries: sp.summaries, annotations: sp.annotations };
+    const { s, x } = fromSpec(sp, START);
     setSel(s); setExtra(x); setPicked([]); setFocus(null);
     setOpened({ id: sp.id, title: sp.title, revision: savedId ? a.revision : null });
     setInitialLayout(a.layout ?? null); setCanvasKey((k) => k + 1); setCompilation(null);
@@ -183,6 +179,26 @@ export function App() {
     setSel(s); setExtra(x);
     if (!(await compileWith(s, x))) { setSel(before.s); setExtra(before.x); }
   }, [compileWith, sel, extra]);
+
+  // A planner proposal is a spec like any other: shown at once, saved only by Save.
+  const [candidates, setCandidates] = useState<{ name: string; iris: string[] }[]>([]);
+  const ask = useCallback(async (text: string) => {
+    if (!owner) return;
+    const spec = buildSpec(sel, extra, opened.id, opened.title || 'Untitled view');
+    setBusy(true); setError(null); setCandidates([]);
+    try {
+      const r = await api.plan(owner, spec, text, snapshotFor(scopeKey(spec.scope)));
+      snapshot.current = { key: scopeKey(spec.scope), id: r.snapshotId };
+      if (!r.spec) { setCandidates(r.candidates); setNotice('The request names something several concepts could be; pick one.'); return; }
+      const { s, x } = fromSpec(r.spec, sel);
+      await apply(s, x);
+      setNotice(`${r.summary || 'View proposed.'}${r.repaired ? ' (corrected once after a check)' : ''}`);
+    } catch (e) {
+      setError(describe(e));                                    // the current view stays as it was
+    } finally {
+      setBusy(false);
+    }
+  }, [owner, sel, extra, opened, apply]);
 
   const onAction = useCallback((a: Action) => {
     if (!compilation) return;
@@ -237,6 +253,9 @@ export function App() {
         <Sidebar owners={catalog?.owners ?? []} owner={owner} onOwner={chooseOwner} graphs={ownerCat?.graphs ?? []}
                  levels={ownerCat?.levels ?? []} sel={sel} onChange={setSel} onSearch={search} hits={hits}
                  searching={searching} onCompile={compile} busy={busy} onUnhide={unhide}>
+          {owner && catalog?.planner.enabled && sel.primary.length > 0 &&
+            <Ask onAsk={(q) => void ask(q)} busy={busy} candidates={candidates}
+                 onPick={(iri) => { setCandidates([]); void apply({ ...sel, seeds: [...sel.seeds.filter((x) => x.iri !== iri), { iri, label: iri.split(/[#/:]/).pop() ?? iri }] }, extra); }} />}
           {owner && <Views views={views} onOpen={(id) => void openSaved(id)} onImport={(a) => void openArtifact(a, null)} onError={setError} />}
         </Sidebar>
         <section className="canvas" aria-label="diagram">
@@ -284,5 +303,35 @@ function Changes({ c }: { c: NonNullable<Compilation['changes']> }) {
       {c.changedGraphs.length > 0 && ` Changed graphs: ${c.changedGraphs.join(', ')}.`}
       {c.removedEntities.length > 0 && ` Gone: ${c.removedEntities.map((i) => i.split(/[#/:]/).pop()).join(', ')} (not replaced).`}
     </div>
+  );
+}
+
+function fromSpec(sp: ViewSpec, base: Selection): { s: Selection; x: ops.Extra } {
+  const known = new Map(base.seeds.map((x) => [x.iri, x.label]));
+  return {
+    s: { ...base, primary: sp.scope.primaryGraphs, context: sp.scope.contextGraphs, languages: sp.presentation.languages,
+         seeds: sp.selection.entities.map((iri) => ({ iri, label: known.get(iri) ?? iri.split(/[#/:]/).pop() ?? iri })),
+         excluded: sp.selection.excludedEntities, levels: sp.selection.levels, kinds: sp.selection.relationKinds,
+         hops: sp.selection.expansion.hops, direction: sp.selection.expansion.direction },
+    x: { groups: sp.groups, summaries: sp.summaries, annotations: sp.annotations },
+  };
+}
+
+function Ask({ onAsk, busy, candidates, onPick }: { onAsk: (q: string) => void; busy: boolean;
+              candidates: { name: string; iris: string[] }[]; onPick: (iri: string) => void }) {
+  const [q, setQ] = useState('');
+  return (
+    <fieldset aria-label="ask for a view"><legend>Ask for a view</legend>
+      <form onSubmit={(e) => { e.preventDefault(); if (q.trim()) onAsk(q.trim()); }}>
+        <textarea aria-label="request" rows={3} value={q} onChange={(e) => setQ(e.target.value)}
+                  placeholder="e.g. show only the domain level around orders" />
+        <button type="submit" disabled={busy || !q.trim()}>Ask</button>
+      </form>
+      {candidates.map((c) => (
+        <div key={c.name}>“{c.name}” could be:{' '}
+          {c.iris.map((iri) => <button key={iri} type="button" onClick={() => onPick(iri)}>{iri.split(/[#/:]/).pop()}</button>)}
+        </div>
+      ))}
+    </fieldset>
   );
 }

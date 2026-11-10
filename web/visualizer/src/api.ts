@@ -43,6 +43,9 @@ export const api = {
   compile: (owner: string, spec: ViewSpec, opts: { snapshotId?: string; mode?: 'strict' | 'tolerant'; compareTo?: string } = {}) =>
     call<Compilation>('/compile', { owner, spec, mode: opts.mode ?? 'strict',
       ...(opts.snapshotId ? { snapshotId: opts.snapshotId } : {}), ...(opts.compareTo ? { compareTo: opts.compareTo } : {}) }),
+  plan: (owner: string, spec: ViewSpec, request: string, snapshotId?: string) =>
+    call<{ snapshotId: string; spec: ViewSpec | null; summary: string; candidates: { name: string; iris: string[] }[]; repaired: boolean }>(
+      '/plan', { owner, spec, request, ...(snapshotId ? { snapshotId } : {}) }),
   views: (owner: string) => call<{ views: SavedView[] }>(`/views?owner=${encodeURIComponent(owner)}`),
   view: (owner: string, id: string) => call<Artifact>(`/views/${encodeURIComponent(id)}?owner=${encodeURIComponent(owner)}`),
   save: (owner: string, id: string, compileId: string, layout: Layout, expectedRevision: number | null) =>
