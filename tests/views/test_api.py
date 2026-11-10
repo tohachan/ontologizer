@@ -225,6 +225,17 @@ def test_search_matches_any_language_and_reuses_the_snapshot(env):
     assert [r["iri"] for r in again["results"]] == [f"{D}Item"] and engine.reads == reads
 
 
+def test_search_matches_words_in_any_order_without_case(env):
+    app, _, _ = env
+    body = {"owner": "study", "scope": {"primaryGraphs": ["shared/domain"], "contextGraphs": ["upper/gufo"]}}
+    st, out = call(app, "POST", "search", {**body, "query": "ЗАКАЗ order"})     # the words are in two labels
+    assert st == 200 and [(r["label"], r["matched"]) for r in out["results"]] == [("Order", "Order")]
+    st, out = call(app, "POST", "search", {**body, "query": "items"})          # a plural finds its stem
+    assert [r["label"] for r in out["results"]] == ["Item"]
+    st, out = call(app, "POST", "search", {**body, "query": "rder"})           # words start words
+    assert out["results"] == [] and out["total"] == 0
+
+
 def test_plan_says_it_is_disabled(env):
     st, body = call(env[0], "POST", "plan", {"owner": "study", "request": "show orders"})
     assert (st, body["error"]["code"]) == (501, "planner-disabled")

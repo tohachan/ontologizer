@@ -1,6 +1,6 @@
 """The view tools of the visualizer's agent (docs/visualizer-agent.md §4), and their MCP endpoint.
 
-The agent rebuilds the open view on request. Its only tools are these seven; they read the store through the
+The agent rebuilds the open view on request. Its only tools are these eight; they read the store through the
 `Visualizer` (snapshots, compile, search, catalog), never write it, and change nothing but the session's
 current view. `ViewSession` holds a chat session's state, `ViewTools` implements the tools on it, and
 `McpEndpoint` speaks MCP (JSON-RPC 2.0 over streamable HTTP, plain JSON answers) for one session's harness.
@@ -10,12 +10,14 @@ The harness bridge owns the HTTP route, the sessions' lifetime and the SSE write
 from __future__ import annotations
 
 import copy
+import fnmatch
 import hmac
 import json
 import queue
 import re
 import secrets
 import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -23,8 +25,9 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from ontologizer.adapters.visualization.app import ApiError, Visualizer
+from ontologizer.adapters.visualization.app import ApiError, Visualizer, _Cache
 from ontologizer.adapters.visualization.serialize import to_json
+from ontologizer.core.views.match import Query, Texts, normalize, tier
 from ontologizer.core.views.project import _upper_test
 from ontologizer.core.views.reader import choose_label
 from ontologizer.core.views.spec import SCHEMA_PATH, SpecError, parse
@@ -34,7 +37,9 @@ SERVER_INFO = {"name": "ontologizer-view", "version": "1"}
 MAX_EDGES = 400                  # edges get_current_view lists
 MAX_LINKS = 100                  # links describe_concept lists each way
 MAX_MEMBERS = 50                 # member IRIs get_current_view lists per node
-MAX_DEFINITION = 400             # characters of a definition in a search hit
+MAX_DEFINITION = 300             # characters of a definition in a search hit
+MAX_QUERIES = 10                 # queries per search_concepts call
+MAX_LIST = 500                   # concepts per list_concepts page
 PRESETS = ("domain",)            # the values `presentation.preset` takes (the page's appearance preset)
 
 # --- gUFO categories, as the canvas names them (web/visualizer/src/lanes.ts: CATEGORY_ORDER, categoryOf) ----
@@ -96,15 +101,17 @@ def _node_categories(nodes) -> dict[str, str]:
 class ViewSession:
     """What the tools of one chat session work on. One per browser tab; the bridge creates it.
 
+    - `owner` is unused since ONTO-49 (a session is not bound to an owner); it stays as the last fallback for
+      a view sent without one.
     - `id` names the session in its routes, `secret` is the bearer token its MCP endpoint requires (it goes
       only to the harness, through its MCP config).
-    - `current` is the open view, `{"spec", "compileId", "picked"}`. The bridge sets it from the page's
+    - `current` is the open view, `{"owner", "spec", "compileId", "picked"}`. The bridge sets it from the page's
       request before each turn (`set_current`); `apply_view` and `undo_view` replace it.
     - `history` is the stack `undo_view` pops: one entry per view the agent applied, holding the view it
       replaced and the id of the `data-view` event that replaced it.
     - `events` receives a `data-view` payload (§4) per applied or undone view; the bridge's SSE writer drains it.
     """
-    owner: str
+    owner: str | None = None
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     secret: str = field(default_factory=lambda: secrets.token_urlsafe(32), repr=False)
     current: dict | None = None
@@ -119,7 +126,9 @@ class ViewSession:
                 self.current = None
                 return
             picked = view.get("picked") or []
-            self.current = {"spec": view.get("spec"), "compileId": view.get("compileId"),
+            owner = view.get("owner")
+            self.current = {"owner": owner if isinstance(owner, str) and owner else None,
+                            "spec": view.get("spec"), "compileId": view.get("compileId"),
                             "picked": [p for p in picked if isinstance(p, str)][:MAX_EDGES]}
 
     def authorized(self, headers: Mapping[str, str]) -> bool:
@@ -137,39 +146,275 @@ class ToolFailure(Exception):
         self.body = {"ok": False, "error": error, "message": message, **extra}
 
 
+# --- the concept index over every owner -----------------------------------------------------------------------
+
+LANGUAGES = ("en", "ru")         # label and definition languages of the index, in order of preference
+MATCH = ("exact", "label", "label", "text")     # a hit's `match`, by tier (core/views/match.py)
+
+
+@dataclass(frozen=True)
+class _Graph:
+    """A graph of the hub as the index sees it. `owner` is the registered owner whose own graph it is (None for
+    the kit's graphs and for graphs of a project no available owner registers); `holders` the available owners
+    whose catalog lists it, so whose scopes may read it as context."""
+    path: str
+    base: str
+    release: str | None
+    level: str | None
+    role: str | None
+    owner: str | None
+    holders: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _Hub:
+    owners: tuple[dict, ...]               # {name, available, levels}
+    graphs: dict[str, _Graph]              # by path
+
+    def default(self) -> list[_Graph]:
+        """One version of each graph: the working version, else the newest release. What search and
+        list_concepts read unless `graphs` names others."""
+        by: dict[str, list[_Graph]] = {}
+        for g in self.graphs.values():
+            by.setdefault(g.base, []).append(g)
+        out = []
+        for versions in by.values():
+            working = [g for g in versions if g.release is None]
+            out.append(working[0] if working else max(versions, key=lambda g: _version_key(g.release)))
+        return sorted(out, key=lambda g: g.path)
+
+
+def _version_key(v: str | None):
+    return tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in re.split(r"[.\-+]", v or ""))
+
+
+@dataclass(frozen=True)
+class _Rec:
+    iri: str
+    label: str
+    level: str | None
+    category: str
+    graph: str | None                      # the entity's home graph: its term namespace's, else a primary one
+    owner: str | None
+    context: bool                          # a subject only in graphs read as context
+    home: bool
+    paths: tuple[str, ...]                 # every graph it is a subject in
+    definition: str | None
+    texts: Texts
+
+
+@dataclass(frozen=True)
+class _Part:
+    """One scope of the index: an owner's graphs as primary, readable kit graphs as context."""
+    owner: str
+    cfg: object
+    scope: object
+    model: object
+    records: dict[str, _Rec]
+
+
 # --- the tools -----------------------------------------------------------------------------------------------
 
+NEXT = {   # what to do next, appended to a failure's message
+    "invalid-spec": "fix the issues listed and call preview_view again",
+    "out-of-scope": "put only the owner's own graphs (get_catalog: own true) in primaryGraphs and the others in "
+                    "contextGraphs, one version of each graph; or name the right owner",
+    "display-limit": "collapse groups, drop seeds, lower expansion.hops or drop relation kinds, then preview again",
+    "unknown-owner": "call get_catalog for the owners that are available",
+    "engine-unavailable": "the ontology store does not answer; tell the user and stop",
+    "upstream-error": "the ontology store failed; tell the user and stop",
+    "scope-too-large": "name fewer graphs in `graphs`, or fewer graphs in the spec's scope",
+    "busy": "retry the call once",
+}
+
+
 class ViewTools:
-    """The seven view tools over a `Visualizer`. Each takes the session and the tool's arguments and returns a
-    JSON-ready dict, or raises `ToolFailure`. Reads go through the app's caches and limits like the page's."""
+    """The view tools over a `Visualizer`. Each takes the session and the tool's arguments and returns a
+    JSON-ready dict, or raises `ToolFailure`. Reads go through the app's caches and limits like the page's.
+
+    Search, listing and description read every graph the hub knows, as a set of scopes: per available owner,
+    its own graphs as primary and the kit's graphs as context, one version of each graph (the working one
+    unless `graphs` names a release). Each scope's model is indexed once and cached (`Settings.index_ttl`)."""
 
     def __init__(self, app: Visualizer):
         self.app = app
+        settings = getattr(app, "settings", None)
+        self.parts = _Cache(64, getattr(settings, "index_ttl", 120), getattr(app, "clock", time.monotonic))
 
-    # ---- the current view ----------------------------------------------------------------------------------
-    def _current(self, s: ViewSession) -> dict:
+    # ---- the hub ----------------------------------------------------------------------------------------------
+    def _hub(self) -> _Hub:
+        owners, entries = [], {}
+        for o in self._call(lambda: self.app.catalog(None))["owners"]:
+            if not o["available"]:
+                owners.append({"name": o["name"], "available": False, "levels": []})
+                continue
+            cat = self._call(lambda: self.app.catalog(o["name"]))
+            owners.append({"name": o["name"], "available": True, "levels": list(cat["levels"])})
+            for g in cat["graphs"]:
+                entries.setdefault(g["path"], []).append((o["name"], g))
+        graphs = {}
+        for path, seen in entries.items():
+            g = seen[0][1]
+            own = sorted(name for name, e in seen if e["own"])
+            graphs[path] = _Graph(path=path, base=path.partition("@")[0], release=g["release"], level=g["level"],
+                                  role=g["role"], owner=own[0] if own else None,
+                                  holders=tuple(sorted(name for name, _ in seen)))
+        return _Hub(tuple(owners), graphs)
+
+    def _selection(self, hub: _Hub, graphs) -> list[_Graph]:
+        if graphs is None:
+            return hub.default()
+        unknown = [p for p in graphs if p not in hub.graphs]
+        if unknown:
+            raise ToolFailure("unknown-graph", f"no graph {unknown[0]!r} in the hub; call get_catalog for the graph "
+                                               "paths (a release is path@version)")
+        return [hub.graphs[p] for p in dict.fromkeys(graphs)]
+
+    @staticmethod
+    def _plans(hub: _Hub, selection: list[_Graph]) -> list[tuple[str, tuple[str, ...], tuple[str, ...]]]:
+        """The scopes that read `selection`: `(owner, primary, context)`. An owner's graphs are primary in its
+        scopes; two versions of one graph go to two scopes. Kit graphs are context of each scope whose owner
+        lists them; one that none of those reads is read as context on its holder's default graphs."""
+        owned: dict[str, list[_Graph]] = {}
+        loose: list[_Graph] = []
+        for g in selection:
+            (owned.setdefault(g.owner, []) if g.owner else loose).append(g)
+        bases = [g.base for g in loose]
+        twice = next((b for b in bases if bases.count(b) > 1), None)
+        if twice:
+            raise ToolFailure("two-versions", f"two versions of {twice!r} were named; name one of them per call")
+        plans, read = [], set()
+        for owner in sorted(owned):
+            layers: list[list[_Graph]] = []
+            for g in sorted(owned[owner], key=lambda g: (g.release is not None, _version_key(g.release), g.path)):
+                layer = next((l for l in layers if g.base not in {x.base for x in l}), None)
+                if layer is None:
+                    layers.append(layer := [])
+                layer.append(g)
+            for layer in layers:
+                ctx = tuple(sorted(g.path for g in loose if owner in g.holders))
+                plans.append((owner, tuple(sorted(g.path for g in layer)), ctx))
+                read.update(ctx)
+        rest = [g for g in loose if g.path not in read]
+        default = hub.default()
+        for holder in sorted({g.holders[0] for g in rest if g.holders}):
+            primary = tuple(sorted(g.path for g in default if g.owner == holder))
+            if primary:
+                plans.append((holder, primary, tuple(sorted(g.path for g in rest if g.holders and g.holders[0] == holder))))
+        return plans
+
+    def _part(self, hub: _Hub, owner: str, primary: tuple[str, ...], context: tuple[str, ...]) -> _Part:
+        key = json.dumps([owner, primary, context])
+        hit = self.parts.get(key)
+        if hit is not None:
+            return hit
+        cfg, scope, _snap, model = self._call(lambda: self.app.source(owner, list(primary), list(context)))
+        cat = self._markers(scope, model)
+        prim = {g.iri for g in scope.primary}
+        path_of = {g.iri: g.path for g in (*scope.primary, *scope.context)}
+        records = {}
+        for e in model.entities.values():
+            paths = tuple(path_of[i] for i in e.graphs if i in path_of)
+            home = next((p for p in paths if e.iri.startswith(cfg.term_ns(p))), None)
+            graph = home or next((path_of[i] for i in e.graphs if i in prim), None) or (paths[0] if paths else None)
+            g = hub.graphs.get(graph or "")
+            records[e.iri] = _Rec(
+                iri=e.iri, label=choose_label(e, LANGUAGES), level=e.level, category=cat(e.iri), graph=graph,
+                owner=g.owner if g else None, context=not (set(e.graphs) & prim), home=home is not None,
+                paths=paths, definition=self._definition(e, LANGUAGES),
+                texts=Texts.of([l.value for l in e.labels], [d.value for d in e.definitions]))
+        part = _Part(owner, cfg, scope, model, records)
+        self.parts.put(key, part)
+        return part
+
+    def _index(self, graphs=None) -> tuple[dict[str, tuple[_Rec, _Part]], list[dict], _Hub]:
+        """Every entity of the selected graphs, once: `{iri: (record, part)}`, the scopes that could not be read,
+        and the hub. An entity in several scopes is taken from the one that holds its home graph."""
+        hub = self._hub()
+        selection = self._selection(hub, graphs)
+        wanted = {g.path for g in selection} if graphs is not None else None
+        out: dict[str, tuple[_Rec, _Part]] = {}
+        unread, first = [], None
+        plans = self._plans(hub, selection)
+        for owner, primary, context in plans:
+            try:
+                part = self._part(hub, owner, primary, context)
+            except ToolFailure as f:
+                first = first or f
+                unread.append({"owner": owner, "graphs": list(primary), "error": f.body["error"]})
+                continue
+            for iri, r in part.records.items():
+                if wanted is not None and not set(r.paths) & wanted:
+                    continue
+                old = out.get(iri)
+                if old is None or (r.home, not r.context) > (old[0].home, not old[0].context):
+                    out[iri] = (r, part)
+        if first is not None and len(unread) == len(plans):
+            raise first
+        return out, unread, hub
+
+    @staticmethod
+    def _filter(recs, owners=None, levels=None, categories=None):
+        return [r for r in recs if (owners is None or r.owner in owners) and (levels is None or r.level in levels)
+                and (categories is None or r.category in categories)]
+
+    # ---- the current view --------------------------------------------------------------------------------------
+    def _current(self, s: ViewSession) -> dict | None:
         with s.lock:
             cur = copy.deepcopy(s.current)
-        if not cur or not isinstance(cur.get("spec"), dict):
-            raise ToolFailure("no-current-view", "the page has sent no view yet; ask the user to open one")
-        return cur
+        return cur if cur and isinstance(cur.get("spec"), dict) else None
 
-    def _compilation(self, s: ViewSession, cur: dict):
+    def _owner_of_spec(self, spec, hub: _Hub | None = None) -> str | None:
+        """The one owner whose own graphs the spec's primaryGraphs are (paths or globs), else None."""
+        prim = ((spec or {}).get("scope") or {}).get("primaryGraphs") if isinstance(spec, dict) else None
+        if not isinstance(prim, list) or not prim:
+            return None
+        try:
+            hub = hub or self._hub()
+        except ToolFailure:
+            return None
+        owners = set()
+        for pat in prim:
+            if not isinstance(pat, str):
+                return None
+            hits = [g for p, g in hub.graphs.items() if fnmatch.fnmatchcase(p, pat) and ("@" in p) == ("@" in pat)]
+            owners |= {g.owner for g in hits} or {None}
+        return owners.pop() if len(owners) == 1 else None
+
+    def _view_owner(self, s: ViewSession, view: dict | None) -> str | None:
+        """Whose view it is: the page's `view.owner`, else the owner of its primary graphs, else the session's."""
+        if view and view.get("owner"):
+            return view["owner"]
+        return (self._owner_of_spec(view.get("spec")) if view else None) or s.owner
+
+    def _compilation(self, owner: str, cur: dict):
         """The compilation of the current view: the page's (or the last apply's) when it is still held and is of
         this spec, else a fresh tolerant compile of it, since it is what the page shows."""
         c = self.app.compilations.get(cur.get("compileId") or "")
         try:
             wanted = parse(cur["spec"]).to_json()
         except SpecError as e:
-            raise ToolFailure("invalid-spec", "the current view's spec is invalid", issues=to_json(e.issues))
-        if c is not None and c.owner == s.owner and c.spec.to_json() == wanted:
+            raise ToolFailure("invalid-spec", "the current view's spec is invalid; build a new spec from "
+                                              "list_concepts or search_concepts", issues=to_json(e.issues))
+        if c is not None and c.owner == owner and c.spec.to_json() == wanted:
             return c
-        out = self._call(lambda: self.app.compile({"owner": s.owner, "spec": cur["spec"], "mode": "tolerant"}))
+        out = self._call(lambda: self.app.compile({"owner": owner, "spec": cur["spec"], "mode": "tolerant"}))
         return self.app.compilations.get(out["compileId"])
 
     def get_current_view(self, s: ViewSession) -> dict:
         cur = self._current(s)
-        c = self._compilation(s, cur)
+        if cur is None:
+            with s.lock:
+                picked = list((s.current or {}).get("picked") or [])
+            return {"owner": None, "spec": None, "empty": True, "counts": None, "nodes": [], "edges": [],
+                    "edgesOmitted": 0, "picked": picked,
+                    "message": "the page shows no diagram; find concepts with list_concepts or search_concepts and "
+                               "build a new spec, then apply_view with its owner"}
+        owner = self._view_owner(s, cur)
+        if owner is None:
+            raise ToolFailure("no-owner", "the open view names no owner and its primary graphs belong to no single "
+                                          "owner; build a new spec and apply_view it with an owner")
+        c = self._compilation(owner, cur)
         d = c.diagram
         cats = _node_categories(d.nodes)
         nodes = [{"id": n.id, "kind": n.kind, "label": n.label, "level": n.level, "category": cats[n.id],
@@ -177,37 +422,36 @@ class ViewTools:
                   "context": n.context, **({"parent": n.parent} if n.parent else {})} for n in d.nodes]
         edges = [{"id": e.id, "source": e.source, "target": e.target, "kind": e.kind, "type": e.type,
                   "label": e.label} for e in d.edges[:MAX_EDGES]]
-        return {"owner": s.owner, "spec": cur["spec"], "counts": to_json(d.counts), "nodes": nodes, "edges": edges,
+        return {"owner": owner, "spec": cur["spec"], "counts": to_json(d.counts), "nodes": nodes, "edges": edges,
                 "edgesOmitted": max(0, len(d.edges) - MAX_EDGES), "picked": cur.get("picked") or []}
 
-    # ---- the owner's graphs --------------------------------------------------------------------------------
+    # ---- the hub's owners and graphs -----------------------------------------------------------------------
     def get_catalog(self, s: ViewSession) -> dict:
-        cat = self._call(lambda: self.app.catalog(s.owner))
-        return {"owner": s.owner, "levels": cat["levels"], "presets": list(PRESETS),
-                "graphs": [{"path": g["path"], "level": g["level"], "role": g["role"], "release": g["release"],
-                            "own": g["own"]} for g in cat["graphs"]]}
+        try:
+            recs, unread, hub = self._index()
+            counts: dict[str, int] = {}
+            for r, _ in recs.values():
+                counts[r.graph] = counts.get(r.graph, 0) + 1
+            read = {g.path for g in hub.default()} - {p for u in unread for p in u["graphs"]}
+        except ToolFailure as f:
+            if f.body["error"] in ("unknown-owner", "engine-unavailable", "upstream-error", "busy"):
+                raise
+            hub, counts, read, unread = self._hub(), {}, set(), [{"error": f.body["error"]}]
+        owners = []
+        for o in hub.owners:
+            graphs = [g for g in hub.graphs.values()
+                      if g.owner == o["name"] or (g.owner is None and o["name"] in g.holders)] if o["available"] else []
+            owners.append({**o, "graphs": [
+                {"path": g.path, "level": g.level, "role": g.role, "release": g.release, "own": g.owner == o["name"],
+                 "concepts": counts.get(g.path, 0) if g.path in read else None}
+                for g in sorted(graphs, key=lambda g: g.path)]})
+        cur = self._current(s)
+        return {"owners": owners, "currentOwner": self._view_owner(s, cur) if cur else None,
+                "presets": list(PRESETS), **({"unread": unread} if unread else {}),
+                "note": "search_concepts and list_concepts read the working version of each graph (concepts "
+                        "counted); a release (path@version, concepts null) only when named in `graphs`"}
 
     # ---- concepts ------------------------------------------------------------------------------------------
-    def _source(self, s: ViewSession, graphs):
-        """Config, scope and model to search or describe in: the current view's scope, or `graphs` (the owner's
-        own as primary, the others as context; with none of its own, the current primary graphs)."""
-        with s.lock:
-            spec = (s.current or {}).get("spec")
-        if not isinstance(spec, dict):
-            if graphs is None:
-                self._current(s)                      # raises no-current-view
-            spec = {}
-        sc = spec.get("scope") or {}
-        primary, context = list(sc.get("primaryGraphs") or []), list(sc.get("contextGraphs") or [])
-        if graphs is not None:
-            own = {g["path"] for g in self._call(lambda: self.app.catalog(s.owner))["graphs"] if g["own"]}
-            mine = [g for g in graphs if g in own]
-            primary = mine or primary
-            context = [g for g in graphs if g not in mine and g not in primary]
-        languages = list((spec.get("presentation") or {}).get("languages") or ["en"])
-        cfg, scope, snap, model = self._call(lambda: self.app.source(s.owner, primary, context))
-        return cfg, scope, model, languages
-
     @staticmethod
     def _markers(scope, model) -> Callable[[str], str]:
         """The category of an entity: as the canvas names a card that shows inheritance (its upper superclasses
@@ -234,62 +478,106 @@ class ViewTools:
                 return hit[0]
         return sorted(d.value for d in e.definitions)[0] if e.definitions else None
 
-    def search_concepts(self, s: ViewSession, query: str, graphs: list[str] | None = None, limit: int = 20) -> dict:
-        cfg, scope, model, languages = self._source(s, graphs)
-        primary = [g.path for g in scope.primary]
-        context = [g.path for g in scope.context]
-        wanted = set(graphs) if graphs is not None else None
-        out = self._call(lambda: self.app.search({
-            "owner": s.owner, "query": query, "scope": {"primaryGraphs": primary, "contextGraphs": context},
-            "limit": 50, "languages": languages, "snapshotId": model.snapshot_id}))
-        cat = self._markers(scope, model)
-        hits = []
-        for h in out["results"]:
-            if wanted is not None and not set(h["graphs"]) & wanted:
-                continue
-            definition = self._definition(model.entities[h["iri"]], languages)
-            hits.append({"iri": h["iri"], "label": h["label"], "level": h["level"], "category": cat(h["iri"]),
-                         "graph": h["graphs"][0] if h["graphs"] else None, "context": h["context"],
-                         "definition": definition[:MAX_DEFINITION] if definition else None})
-            if len(hits) == limit:
-                break
-        return {"hits": hits, "total": out["total"] if wanted is None else None}
+    def search_concepts(self, s: ViewSession, queries: list[str] | None = None, query: str | None = None,
+                        graphs: list[str] | None = None, owners: list[str] | None = None,
+                        levels: list[str] | None = None, limit: int = 10) -> dict:
+        texts = [q for q in [*(queries or []), *([query] if query else [])] if q.strip()]
+        if not texts:
+            raise ToolFailure("bad-arguments", "give queries: a list of 1 to 10 search texts, e.g. "
+                                               "{\"queries\": [\"agent session\", \"lease\"]}")
+        if len(texts) > MAX_QUERIES:
+            raise ToolFailure("bad-arguments", f"at most {MAX_QUERIES} queries per call; split them over two calls")
+        recs, unread, _ = self._index(graphs)
+        pool = self._filter((r for r, _ in recs.values()), owners, levels)
+        results = []
+        for text in texts:
+            q = Query.of(text)
+            matched = [(t, r) for r in pool if (t := tier(q, r.texts)) is not None]
+            # within a tier: a hit whose shown label matches as well first, then shorter labels
+            ranked = sorted(((t, tier(q, Texts.of([r.label])) != t, len(r.label), normalize(r.label), r.iri, r)
+                             for t, r in matched), key=lambda h: h[:5])
+            hits = [{"iri": r.iri, "label": r.label, "level": r.level, "category": r.category, "graph": r.graph,
+                     "owner": r.owner, "match": MATCH[t], **({"context": True} if r.context else {}),
+                     "definition": r.definition[:MAX_DEFINITION] if r.definition else None}
+                    for t, *_, r in ranked[:limit]]
+            results.append({"query": text, "total": len(ranked), "hits": hits})
+        out = {"results": results}
+        if unread:
+            out["unread"] = unread
+        if all(not r["hits"] for r in results):
+            out["message"] = ("nothing matched; try other words, English words (labels are mostly English), "
+                              "or list_concepts with levels or graphs to browse")
+        return out
+
+    def list_concepts(self, s: ViewSession, graphs: list[str] | None = None, owners: list[str] | None = None,
+                      levels: list[str] | None = None, categories: list[str] | None = None, offset: int = 0,
+                      limit: int = 200) -> dict:
+        recs, unread, _ = self._index(graphs)
+        pool = sorted(self._filter((r for r, _ in recs.values()), owners, levels, categories),
+                      key=lambda r: (r.graph or "", normalize(r.label), r.iri))
+        page = pool[offset:offset + limit]
+        out = {"total": len(pool), "offset": offset,
+               "concepts": [{"iri": r.iri, "label": r.label, "level": r.level, "category": r.category,
+                             "graph": r.graph} for r in page]}
+        if offset + len(page) < len(pool):
+            out["nextOffset"] = offset + len(page)
+        if unread:
+            out["unread"] = unread
+        return out
 
     def describe_concept(self, s: ViewSession, iri: str, graphs: list[str] | None = None) -> dict:
-        cfg, scope, model, languages = self._source(s, graphs)
-        e = model.entities.get(iri)
-        if e is None:
-            raise ToolFailure("unknown-entity", f"{iri} is not in the scope; search_concepts finds IRIs, and "
-                                                "`graphs` describes it in other graphs")
-        cat = self._markers(scope, model)
+        recs, _, _ = self._index(graphs)
+        hit = recs.get(iri)
+        if hit is None:
+            raise ToolFailure("unknown-entity", f"{iri} is in none of the graphs read; use an IRI that "
+                                                "search_concepts or list_concepts returned, or name its graphs "
+                                                "(path@version for a release) in `graphs`")
+        r, part = hit
+        model, cfg = part.model, part.cfg
+        e = model.entities[iri]
         ents = model.entities
 
         def label(i):
-            return choose_label(ents[i], languages) if i in ents else None
-        out_links = [r for r in model.relationships if r.source == iri and r.target]
-        in_links = [r for r in model.relationships if r.target == iri]
+            return choose_label(ents[i], LANGUAGES) if i in ents else None
+        out_links = [x for x in model.relationships if x.source == iri and x.target]
+        in_links = [x for x in model.relationships if x.target == iri]
         return {
-            "iri": iri, "label": choose_label(e, languages),
+            "iri": iri, "label": r.label, "owner": r.owner,
             "labels": [{"value": l.value, "language": l.language} for l in e.labels],
             "definitions": [{"value": d.value, "language": d.language} for d in e.definitions],
-            "level": e.level, "category": cat(iri), "status": e.status,
+            "level": e.level, "category": r.category, "status": e.status,
             "graphs": [cfg.graph_path(g) for g in e.graphs],
-            "outgoing": [{"id": r.id, "type": r.type, "kind": r.kind, "target": r.target,
-                          "targetLabel": label(r.target)} for r in out_links[:MAX_LINKS]],
-            "incoming": [{"id": r.id, "type": r.type, "kind": r.kind, "source": r.source,
-                          "sourceLabel": label(r.source)} for r in in_links[:MAX_LINKS]],
+            "outgoing": [{"id": x.id, "type": x.type, "kind": x.kind, "target": x.target,
+                          "targetLabel": label(x.target)} for x in out_links[:MAX_LINKS]],
+            "incoming": [{"id": x.id, "type": x.type, "kind": x.kind, "source": x.source,
+                          "sourceLabel": label(x.source)} for x in in_links[:MAX_LINKS]],
             "outgoingTotal": len(out_links), "incomingTotal": len(in_links)}
 
     # ---- views ---------------------------------------------------------------------------------------------
-    def _compile(self, s: ViewSession, spec) -> dict:
+    def _owner_for(self, s: ViewSession, spec, owner: str | None) -> str:
+        """The owner a spec compiles for: the one named, else the owner of its primary graphs, else the current
+        view's owner."""
+        if owner is not None:
+            return owner
+        found = self._owner_of_spec(spec)
+        if found is None:
+            cur = self._current(s)
+            found = self._view_owner(s, cur) if cur else s.owner
+        if found is None:
+            raise ToolFailure("no-owner", "name the owner whose own graphs are the spec's primaryGraphs: "
+                                          "{\"owner\": \"<name>\", \"spec\": …}; get_catalog lists the owners")
+        return found
+
+    def _compile(self, s: ViewSession, spec, owner: str) -> dict:
         """A strict compile of `spec`, on the current view's snapshot when it is of the same graphs."""
         if not isinstance(spec, dict):
-            raise ToolFailure("invalid-spec", "spec must be a ViewSpec object")
+            raise ToolFailure("invalid-spec", "spec must be a full ViewSpec object; see the ViewSpec in your "
+                                              "instructions")
         with s.lock:
             cid = (s.current or {}).get("compileId")
         held = self.app.compilations.get(cid or "")
-        body = {"owner": s.owner, "spec": spec, "mode": "strict"}
-        if held is not None and held.owner == s.owner:
+        body = {"owner": owner, "spec": spec, "mode": "strict"}
+        if held is not None and held.owner == owner:
             try:
                 return self.app.compile({**body, "snapshotId": held.snapshot.id})
             except ApiError as e:
@@ -297,49 +585,58 @@ class ViewTools:
                     raise self._failure(e) from None
         return self._call(lambda: self.app.compile(body))
 
-    def preview_view(self, s: ViewSession, spec: dict) -> dict:
-        out = self._compile(s, spec)
+    def preview_view(self, s: ViewSession, spec: dict, owner: str | None = None) -> dict:
+        owner = self._owner_for(s, spec, owner)
+        out = self._compile(s, spec, owner)
         counts = out["diagram"]["counts"]
-        return {"ok": True, "counts": counts, "shown": counts["shownNodes"]}
+        return {"ok": True, "owner": owner, "counts": counts, "shown": counts["shownNodes"]}
 
-    def apply_view(self, s: ViewSession, spec: dict, summary: str) -> dict:
-        summary = " ".join(str(summary).split())[:200]
+    def apply_view(self, s: ViewSession, spec: dict, summary: str | None = None, owner: str | None = None) -> dict:
+        if summary is None and isinstance(spec, dict):
+            summary = str(spec.get("title") or "")
+        summary = " ".join(str(summary or "").split())[:200]
         if not summary:
-            raise ToolFailure("bad-summary", "summary is one line saying what changed")
-        out = self._compile(s, spec)
+            raise ToolFailure("bad-summary", "give summary: one line saying what changed")
+        owner = self._owner_for(s, spec, owner)
+        out = self._compile(s, spec, owner)
         event = {"type": "data-view", "id": "view-" + uuid.uuid4().hex,
-                 "data": {"spec": spec, "summary": summary, "undoOf": None}}
+                 "data": {"spec": spec, "summary": summary, "undoOf": None, "owner": owner}}
         with s.lock:
             if s.current and isinstance(s.current.get("spec"), dict):
                 s.history.append({"view": s.current, "event": event["id"], "summary": summary})
-            s.current = {"spec": spec, "compileId": out["compileId"], "picked": []}
+            s.current = {"owner": owner, "spec": spec, "compileId": out["compileId"], "picked": []}
             s.events.put(event)
-        return {"ok": True, "counts": out["diagram"]["counts"], "viewEventId": event["id"]}
+        return {"ok": True, "owner": owner, "counts": out["diagram"]["counts"], "viewEventId": event["id"]}
 
     def undo_view(self, s: ViewSession) -> dict:
         with s.lock:
             if not s.history:
-                raise ToolFailure("nothing-to-undo", "there is no earlier view in this session")
+                raise ToolFailure("nothing-to-undo", "there is no earlier view in this session; build the view "
+                                                     "wanted and apply_view it")
             last = s.history.pop()
-            s.current = {**last["view"], "picked": []}
+        view = last["view"]
+        owner = self._view_owner(s, view)
+        with s.lock:
+            s.current = {**view, "owner": owner, "picked": []}
             event = {"type": "data-view", "id": "view-" + uuid.uuid4().hex,
-                     "data": {"spec": last["view"]["spec"], "summary": "Undo: " + last["summary"],
-                              "undoOf": last["event"]}}
+                     "data": {"spec": view["spec"], "summary": "Undo: " + last["summary"], "undoOf": last["event"],
+                              "owner": owner}}
             s.events.put(event)
         return {"ok": True, "viewEventId": event["id"], "undoOf": last["event"]}
 
     # ---- errors --------------------------------------------------------------------------------------------
     @staticmethod
     def _failure(e: ApiError) -> ToolFailure:
+        message = f"{e.message}; {NEXT[e.code]}" if e.code in NEXT else e.message
         if e.code == "invalid-spec":
-            return ToolFailure(e.code, e.message, issues=e.details or [])
+            return ToolFailure(e.code, message, issues=e.details or [])
         if e.code == "out-of-scope":
-            return ToolFailure(e.code, e.message, issues=[{"code": "out-of-scope", "message": e.message,
-                                                           "path": "scope"}])
+            return ToolFailure(e.code, message, issues=[{"code": "out-of-scope", "message": e.message,
+                                                         "path": "scope"}])
         if e.code == "display-limit":
             d = e.details or {}
-            return ToolFailure(e.code, e.message, count=d.get("count"), limit=d.get("limit"))
-        return ToolFailure(e.code, e.message)
+            return ToolFailure(e.code, message, count=d.get("count"), limit=d.get("limit"))
+        return ToolFailure(e.code, message)
 
     def _call(self, fn):
         try:
@@ -360,7 +657,12 @@ def _view_spec_schema() -> tuple[dict, dict]:
 
 _SPEC, _DEFS = _view_spec_schema()
 _GRAPHS = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 256}, "maxItems": 64,
-           "description": "Graph paths (from get_catalog). Default: the current view's scope."}
+           "description": "Graph paths from get_catalog (path@version for a release). Default: every graph of "
+                          "the hub, in its working version."}
+_NAMES = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}, "maxItems": 64}
+_OWNER = {"type": "string", "minLength": 1, "maxLength": 128,
+          "description": "The owner whose own graphs are the spec's primaryGraphs (get_catalog). Default: the owner "
+                         "of the spec's primary graphs, else the open view's owner."}
 
 
 def _schema(props: dict | None = None, required=()) -> dict:
@@ -369,38 +671,54 @@ def _schema(props: dict | None = None, required=()) -> dict:
 
 TOOLS = [
     ("get_current_view",
-     "The view open on the page now: its ViewSpec, what it shows (nodes with label, level, gUFO category, graph "
-     "and member IRIs; edges, at most 400), the counts (shown, omitted, boundary) and the ids the user picked. "
-     "Call it first in every turn: requests are changes to this view.",
+     "The view open on the page now: its owner and ViewSpec, what it shows (nodes with label, level, gUFO "
+     "category, graph and member IRIs; edges, at most 400), the counts and the ids the user picked. With no "
+     "diagram open it answers empty: true and no nodes. Call it first in every turn.",
      _schema()),
     ("get_catalog",
-     "The owner's graphs (own: true, usable as primary graphs) and the graphs it may read as context, each with "
-     "its level, role and release; the preset's levels; the values of presentation.preset. A scope reads one "
-     "version of each graph.",
+     "Every owner of the hub: whether it is available, its levels, and its graphs (own: true may be primary in "
+     "its views; the others are context), each with level, role, release and its number of concepts. Plus the "
+     "values of presentation.preset. A scope reads one version of each graph.",
      _schema()),
+    ("list_concepts",
+     "A compact index of concepts: iri, label, level, gUFO category and graph, ordered by graph then label. "
+     "Covers every owner's graphs (working versions) unless `graphs` or `owners` narrow it; filter by levels "
+     "and categories; page with offset and limit (<= 500). The cheapest way to see what exists.",
+     _schema({"graphs": _GRAPHS, "owners": {**_NAMES, "description": "Owner names from get_catalog."},
+              "levels": {**_NAMES, "description": "Level ids, e.g. domain, task, application, variation."},
+              "categories": {**_NAMES, "description": "gUFO category names, e.g. Kind, Role, Relator, EventType."},
+              "offset": {"type": "integer", "minimum": 0, "default": 0},
+              "limit": {"type": "integer", "minimum": 1, "maximum": MAX_LIST, "default": 200}})),
     ("search_concepts",
-     "Find concepts by text in labels and definitions. Returns IRIs with label, level, gUFO category, graph and "
-     "definition. Searches the current view's scope unless `graphs` names others. Use only IRIs it or "
-     "describe_concept returned.",
-     _schema({"query": {"type": "string", "minLength": 1, "maxLength": 200},
-              "graphs": _GRAPHS,
-              "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}}, ["query"])),
+     "Find concepts by words, several queries in one call. A query matches when all its words start words of a "
+     "concept's labels or definitions, in any order, without case or accents (a plural or inflected word also "
+     "matches its stem). Hits, per query and best first (match: exact, label, text), carry iri, label, level, "
+     "gUFO category, graph, owner and definition. Covers every owner's graphs unless `graphs`, `owners` or "
+     "`levels` narrow it. Labels are mostly English: search in English as well as the user's language.",
+     _schema({"queries": {"type": "array", "minItems": 1, "maxItems": MAX_QUERIES,
+                          "items": {"type": "string", "minLength": 1, "maxLength": 200}},
+              "query": {"type": "string", "minLength": 1, "maxLength": 200, "description": "One query (old form)."},
+              "graphs": _GRAPHS, "owners": {**_NAMES, "description": "Owner names from get_catalog."},
+              "levels": {**_NAMES, "description": "Level ids, e.g. domain, task."},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10,
+                        "description": "Hits per query."}})),
     ("describe_concept",
-     "One concept: its labels, definitions, level, gUFO category, graphs, and its links (relationship id, kind, "
-     "type, the other end and its label), at most 100 each way. In the current view's scope unless `graphs` "
-     "names others.",
+     "One concept: its labels, definitions, level, gUFO category, owner, graphs, and its links (relationship "
+     "id, kind, type, the other end and its label), at most 100 each way. Call it only when a definition or "
+     "the neighbours decide the view.",
      _schema({"iri": {"type": "string", "minLength": 1, "maxLength": 2048}, "graphs": _GRAPHS}, ["iri"])),
     ("preview_view",
-     "Compile a full ViewSpec strictly without showing it. Answers {ok: true, counts, shown}, or ok: false with "
-     "the issues (schema, unknown IRIs, scope), or error display-limit when the seeds and group members do not "
-     "fit maxNodes. Limits: maxNodes <= 200, maxEdges <= 400, groups of <= 500 members, one version per graph.",
-     _schema({"spec": {**_SPEC, "description": "A full ViewSpec v1."}}, ["spec"])),
+     "Compile a full ViewSpec strictly for an owner, without showing it. Answers {ok: true, owner, counts, "
+     "shown}, or ok: false with the issues (schema, unknown IRIs, scope), or error display-limit when the "
+     "seeds and group members do not fit maxNodes. Limits: maxNodes <= 200, maxEdges <= 400, groups of <= 500 "
+     "members, one version per graph, primary graphs only of the owner.",
+     _schema({"owner": _OWNER, "spec": {**_SPEC, "description": "A full ViewSpec v1."}}, ["spec"])),
     ("apply_view",
-     "Compile a full ViewSpec strictly and, if it passes, show it on the page in place of the current view "
-     "(the user can undo). `summary` is one line saying what changed, shown in the chat. On failure it answers "
-     "as preview_view and the page does not change.",
-     _schema({"spec": {**_SPEC, "description": "A full ViewSpec v1."},
-              "summary": {"type": "string", "minLength": 1, "maxLength": 200}}, ["spec", "summary"])),
+     "Compile a full ViewSpec strictly for an owner and, if it passes, show it on the page in place of the "
+     "current view (the page switches to that owner; the user can undo). `summary` is one line saying what "
+     "changed, shown in the chat. On failure it answers as preview_view and the page does not change.",
+     _schema({"owner": _OWNER, "spec": {**_SPEC, "description": "A full ViewSpec v1."},
+              "summary": {"type": "string", "minLength": 1, "maxLength": 200}}, ["spec"])),
     ("undo_view",
      "Go back to the view before the last one this session applied, and show it. ok: false when there is none.",
      _schema()),
@@ -445,7 +763,8 @@ class McpEndpoint:
             case "initialize":
                 result = {"protocolVersion": PROTOCOL_VERSION, "capabilities": {"tools": {}},
                           "serverInfo": SERVER_INFO,
-                          "instructions": "View tools of the ontologizer visualizer. Start from get_current_view."}
+                          "instructions": "View tools of the ontologizer visualizer. Start from get_current_view, "
+                                          "then list_concepts or search_concepts."}
             case "ping":
                 result = {}
             case "tools/list":

@@ -26,6 +26,7 @@ from ontologizer.core.levels import Preset
 from ontologizer.core.views.builders import context_for, overview_spec, target_graphs
 from ontologizer.core.views.project import (COMPILER_VERSION, DiagramModel, DisplayLimitExceeded, compile_view,
                                              scope_facts)
+from ontologizer.core.views.match import Query, Texts, tier
 from ontologizer.core.views.reader import choose_label, read_model
 from ontologizer.core.views.scope import OutOfScope, Owners, Scope, UnknownOwner, catalog, resolve
 from ontologizer.core.views.source import ScopedReader, ScopeTooLarge, Snapshot
@@ -62,6 +63,7 @@ class Settings:
     max_snapshots: int = 8
     max_compilations: int = 32
     catalog_ttl: float = 30
+    index_ttl: float = 120                    # the agent's concept index over every owner (view_tools.py)
     max_parallel_reads: int = 2
     read_wait: float = 10
     static_dir: Path | None = None            # the built browser bundle (web/visualizer/dist)
@@ -217,9 +219,9 @@ class Visualizer:
             case ("DELETE", ["logins", lid]):
                 return 200, a.logins.cancel(lid)
             case ("POST", ["sessions"]):
-                owner = payload.get("owner")
-                self._config(owner)
-                return 200, a.create_session(owner, payload.get("harness"))
+                # not bound to an owner (ONTO-49): each chat request's `view.owner` says whose view is open; an
+                # `owner` sent here by an older page is accepted and ignored
+                return 200, a.create_session(None, payload.get("harness"))
             case ("DELETE", ["sessions", sid]):
                 return 200, a.end_session(sid)
             case ("POST", ["sessions", sid, "chat"]):
@@ -436,21 +438,24 @@ class Visualizer:
         langs = body.get("languages") or ["en"]
         scope = self._scope(cfg, primary, context)
         snap, model = self._snapshot(scope, body.get("snapshotId"))
-        needle = q.strip().casefold()
+        query = Query.of(q)                       # words in any order, no case, no accents (core/views/match.py)
         prim = {g.iri for g in scope.primary}
         hits = []
         for e in model.entities.values():
-            texts = [l.value for l in (*e.labels, *e.definitions)]
-            matched = next((t for t in texts if needle in t.casefold()), None)
-            if matched is None:
+            labels, defs = [l.value for l in e.labels], [d.value for d in e.definitions]
+            rank = tier(query, Texts.of(labels, defs))
+            if rank is None:
                 continue
             label = choose_label(e, langs)
-            rank = 0 if label.casefold() == needle else 1 if label.casefold().startswith(needle) else 2
-            hits.append((rank, label.casefold(), e.iri, {
+            # the text shown as matched: one that holds every word, else the first that holds one
+            texts = [*labels, *defs]
+            matched = next((t for t in texts if tier(query, Texts.of([t])) is not None), None) or next(
+                (t for t in texts if any(tier(Query.of(s), Texts.of([t])) is not None for s in query.stems)), label)
+            hits.append((rank, len(label), label.casefold(), e.iri, {
                 "iri": e.iri, "label": label, "level": e.level, "matched": matched,
                 "graphs": [cfg.graph_path(g) for g in e.graphs], "context": not (set(e.graphs) & prim)}))
-        hits.sort(key=lambda h: h[:3])
-        return {"snapshotId": snap.id, "results": [h[3] for h in hits[:limit]], "total": len(hits)}
+        hits.sort(key=lambda h: h[:4])
+        return {"snapshotId": snap.id, "results": [h[4] for h in hits[:limit]], "total": len(hits)}
 
     def compile(self, body: dict) -> dict:
         owner = body.get("owner")

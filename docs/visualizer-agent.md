@@ -27,7 +27,7 @@ session's history only has to last as long as the tab.
   than the view tools. The service starts each harness so (exact command lines in §3):
   - **Claude** (`adapters/visualization/harness_claude.py`): `--tools ""` (no built-in tool: no Bash, Read,
     Edit, WebFetch, Task…), `--strict-mcp-config` with the view server only, `--allowedTools` naming the
-    seven view tools, `--permission-mode dontAsk` (anything else is refused, never asked),
+    view tools (`VIEW_TOOLS`), `--permission-mode dontAsk` (anything else is refused, never asked),
     `--setting-sources ""` (no user or project settings, hooks or plugins) and `--system-prompt` (the
     instructions replace the coding prompt and any CLAUDE.md). Checked on 2.1.322: the session's tool list is
     exactly the `mcp__view__*` tools, and asked to run `ls` or read a file it has nothing to do it with. What
@@ -81,7 +81,7 @@ shape (`{"error": {"code", "message", "details"}}`).
 | `GET agent/logins/{loginId}` | — | `{"state": "starting" \| "open-url" \| "enter-code" \| "show-code" \| "done" \| "failed", "url": str \| null, "userCode": str \| null, "message": str \| null}` |
 | `POST agent/logins/{loginId}/code` | `{"code": str}` | `{"state"}`. For a flow that asks for a code to paste back. |
 | `DELETE agent/logins/{loginId}` | — | `{}`. Cancels the sign-in. |
-| `POST agent/sessions` | `{"owner": str, "harness": "claude" \| "codex"}` | `{"sessionId"}` |
+| `POST agent/sessions` | `{"harness": "claude" \| "codex"}` (an `owner` is accepted and ignored) | `{"sessionId"}` |
 | `DELETE agent/sessions/{sessionId}` | — | `{}`. Ends the session and kills its process. |
 | `POST agent/sessions/{sessionId}/chat` | the AI SDK chat request (§3) | An SSE stream (§3) |
 | `POST agent/sessions/{sessionId}/stop` | `{}` | `{}`. Kills the turn in progress; the stream ends with an `abort` chunk. |
@@ -92,7 +92,7 @@ the session and starts a new one.
 The routes live in `Visualizer._agent_route` (app.py) and the bridge in `adapters/visualization/agent.py`.
 Further answers:
 
-- `POST agent/sessions` checks the owner as every route does (404 `unknown-owner`); an unknown harness is
+- `POST agent/sessions` binds no owner (ONTO-49): each chat request's `view.owner` names it. An unknown harness is
   404 `unknown-harness`, one not installed 409 `harness-not-installed`.
 - `POST …/chat` answers 409 `turn-in-progress` while a turn runs, 404 `unknown-session` for an ended or
   expired session. The service reads only the last user message's text parts (at most 8000 characters), so
@@ -114,7 +114,7 @@ Those are the pinned versions. The exact chunk names and fields are those of `ui
 `{"id", "messages": [UIMessage…], "trigger", "messageId"}`. The page adds `"view"`:
 
 ```json
-{"view": {"spec": "<the ViewSpec of the open view>", "compileId": "...", "picked": ["<node or edge id>"]}}
+{"view": {"owner": "<the open view's owner, or null>", "spec": "<the ViewSpec of the open view>", "compileId": "...", "picked": ["<node or edge id>"]}}
 ```
 
 `messageId` is present only on a regenerate. For a new message JSON drops it, so the body is
@@ -194,7 +194,7 @@ codex exec [resume <thread id>] --json --skip-git-repo-check --ignore-user-confi
            -c mcp_servers.view.url="http://127.0.0.1:<port>/visualizer/mcp/<session>"
            -c mcp_servers.view.bearer_token_env_var="ONTOLOGIZER_VIEW_MCP_TOKEN"
            -c mcp_servers.view.default_tools_approval_mode="approve"
-           -c mcp_servers.view.enabled_tools=[…the seven view tools…]
+           -c mcp_servers.view.enabled_tools=[…the view tools…]
            -c developer_instructions="<instructions>"  --disable <each feature of §1> [-m M] -
 ```
 
@@ -220,12 +220,13 @@ Each tool's result is a `content` list with one `text` item holding JSON. Result
 
 | Tool | Input | Result |
 | --- | --- | --- |
-| `get_current_view` | `{}` | `{owner, spec, counts, nodes: [{id, kind, label, level, category, graph, members, context}], edges: [{id, source, target, kind, type, label}], picked: [ids]}`. `category` is the card's gUFO type name, chosen as on the canvas. Edges are capped at 400. |
-| `get_catalog` | `{}` | `{owner, graphs: [{path, level, release, own}], levels, presets}`: the owner's graphs and the graphs it may read as context. |
-| `search_concepts` | `{query, graphs?: [path], limit?: ≤50}` | `{hits: [{iri, label, level, category, graph, definition}]}`. `graphs` defaults to the current scope. |
-| `describe_concept` | `{iri}` | `{iri, labels, definitions, level, category, graphs, outgoing: [{type, kind, target, targetLabel}], incoming: [...]}`, up to 100 links each way. |
-| `preview_view` | `{spec}` | Compiles the spec strictly, without applying it: `{ok: true, counts, shown: n}`, or `{ok: false, issues}`, or `{ok: false, error: "display-limit", count, limit}`. |
-| `apply_view` | `{spec, summary}` | Compiles strictly. On success it makes the spec the session's current view, pushes it to the page (`data-view`) and remembers the previous one, then answers `{ok: true, counts}`. On failure it answers as `preview_view` does, and the page does not change. |
+| `get_current_view` | `{}` | `{owner, spec, counts, nodes: [{id, kind, label, level, category, graph, members, context}], edges: [{id, source, target, kind, type, label}], picked: [ids]}`. `category` is the card's gUFO type name, chosen as on the canvas. Edges are capped at 400. With no diagram open: `{owner: null, spec: null, empty: true, nodes: [], edges: [], message}`, not a failure. |
+| `get_catalog` | `{}` | `{owners: [{name, available, levels, graphs: [{path, level, role, release, own, concepts}]}], currentOwner, presets, note}`: every owner the hub registers. |
+| `list_concepts` | `{graphs?, owners?, levels?, categories?, offset?, limit?: ≤500}` | `{total, offset, concepts: [{iri, label, level, category, graph}], nextOffset?}`, ordered by graph, then label, then IRI. Default limit 200. |
+| `search_concepts` | `{queries: [str] (1..10), query?, graphs?, owners?, levels?, limit?: ≤50}` | `{results: [{query, total, hits: [{iri, label, level, category, graph, owner, match, definition, context?}]}]}`, one result per query, in order. `limit` is per query (default 10). |
+| `describe_concept` | `{iri, graphs?}` | `{iri, label, owner, labels, definitions, level, category, status, graphs, outgoing: [{id, type, kind, target, targetLabel}], incoming: [...], outgoingTotal, incomingTotal}`, up to 100 links each way. |
+| `preview_view` | `{owner?, spec}` | Compiles the spec strictly for the owner, without applying it: `{ok: true, owner, counts, shown: n}`, or `{ok: false, issues}`, or `{ok: false, error: "display-limit", count, limit}`. |
+| `apply_view` | `{owner?, spec, summary?}` | Compiles strictly. On success it makes the spec the session's current view, pushes it to the page (`data-view`, with `owner`) and remembers the previous one, then answers `{ok: true, owner, counts, viewEventId}`. On failure it answers as `preview_view` does, and the page does not change. `summary` defaults to the spec's title. |
 | `undo_view` | `{}` | Goes back to the previous view and pushes it the same way: `{ok: true}`, or `{ok: false}` when there is no earlier view. |
 
 **Specs.** A spec is a full ViewSpec v1 (`schemas/views/view-spec.v1.json`), including
@@ -244,42 +245,78 @@ Each tool's result is a `content` list with one `text` item holding JSON. Result
   A spec's own content is checked by the compiler, not at the protocol level, so its issues come back as a
   tool result the agent can read. `tools/list` publishes the full ViewSpec schema as the `spec` input. A
   notification or a client response gets 202 with no body. The endpoint answers POST only; the bridge
-  answers any other method with 405.
+  answers any other method with 405. The harnesses may call exactly the tools of `VIEW_TOOLS`
+  (`ports/view_agent.py`), which a test keeps equal to the tools listed.
 - Failures. Every failure is `isError: true` with `{"ok": false, "error", "message"}`, plus `issues`
   (`[{code, message, path}]`) for `invalid-spec` and `out-of-scope`, and `count` and `limit` for
   `display-limit`. The other codes are the HTTP API's (`engine-unavailable`, `unknown-owner`, …), plus
-  `no-current-view` (the page sent no view), `unknown-entity` (`describe_concept`) and `nothing-to-undo`.
-- Scope of `search_concepts` and `describe_concept`. The current view's scope by default. With `graphs`,
-  the owner's own graphs among them are primary and the others context; with none of its own, the current
-  primary graphs stay primary. `search_concepts` keeps only hits in the named graphs. A hit also carries
-  `context`: the entity is in context graphs only. `describe_concept` gives each link's relationship
-  `id` (for summaries) and `outgoingTotal`, `incomingTotal`.
+  `bad-arguments`, `unknown-graph`, `two-versions`, `no-owner`, `unknown-entity`, `bad-summary` and
+  `nothing-to-undo`. Every message ends with what to do next ("call get_catalog for the graph paths",
+  "collapse groups, drop seeds…"); for the HTTP API's codes the tools append it (`NEXT` in view_tools.py).
+  No tool fails because the page shows no view, or because its view has no primary graph.
+- **Owners.** A session is not bound to an owner. The current view's owner is the request's `view.owner`;
+  for a view sent without one, the one owner whose own graphs its `primaryGraphs` are. `preview_view` and
+  `apply_view` compile for the `owner` given, else the owner of the spec's primary graphs, else the current
+  view's owner; without any, they fail with `no-owner`. Compile still enforces the rules: primary graphs
+  only of that owner, one version of each graph.
+- **What search, listing and describe read** (the *index*). Every graph some available owner's catalog lists,
+  read as a set of scopes, one per owner: that owner's own graphs as primary, the kit's graphs (`upper/gufo`,
+  `kit/core`, `inferred/*`: graphs no available owner owns) as context. In the hub of 2026-11-10 every graph
+  has at most one owning config; a graph several owners claimed would be read under the first by name.
+  - **Version choice.** One version of each graph: the working version (the path without `@`), else, for a
+    graph that has only releases, the newest release by version number. A release is read only when named in
+    `graphs`; naming a release and its working version reads them in two scopes, never one. Release concepts
+    have their own IRIs (`…/domain@0.2:x`), so the two never merge. A view that reads releases is searched
+    by naming its graphs.
+  - An entity found in several scopes is taken from the one holding its home graph (the graph whose term
+    namespace its IRI is in). A record's `graph` is that home graph, else a primary graph it is in; its
+    `owner` the owner of that graph (null for the kit's). `context: true` marks an entity only in context
+    graphs.
+  - Each scope's snapshot is read through `Visualizer.source` and indexed once; the index is cached for
+    `Settings.index_ttl` (120 s). Filters (`graphs`, `owners`, `levels`, `categories`) apply to the index.
+    A scope that cannot be read (`scope-too-large`) is reported in `unread` and the others answer; when none
+    can be read the call fails.
+  - `get_catalog` lists, under each available owner, its own graphs and the kit's graphs it may read. Each
+    graph's `concepts` is the number of index records with that home graph; it is null for a version the
+    index does not read by default (a release with a working version).
+- **Matching** (`core/views/match.py`, also the page's `POST search`). A query is split into words
+  (casefolded, accents removed). A concept matches when every word starts a word of its labels or
+  definitions, in any order ("lease" does not find "release"); a word of five letters or more also matches
+  through a crude stem (two letters off from six, one off at five), so "sessions" finds "Session" and
+  "сессии" finds "Сессия". Ranking: `exact` (a label is the query), `label` (one label holds every word, then
+  every stem), `text` (the words spread over labels and definitions); within a tier, a hit whose shown label
+  matches too, then shorter labels, then label and IRI. Labels and definitions are chosen in `en`, then `ru`.
 - `category`. On a node of `get_current_view`, the canvas's own value: the node's markers named by the
   first gUFO class in the canvas's display order (`CATEGORY_ORDER` in `web/visualizer/src/lanes.ts`, ported
   and tested for equality), an area its members' shared value, else `mixed`; no marker is `other`. For
-  `search_concepts` and `describe_concept`, as a card shows it with `class-inheritance` selected.
-- `get_current_view` uses the page's compilation when the service still holds it for the same spec,
-  else compiles the spec tolerantly (it is what the page shows). A node lists at most 50 member IRIs and
-  carries `memberCount`; `edgesOmitted` counts edges past 400. `get_catalog` gives `presets: ["domain"]`,
-  the values of `presentation.preset`.
-- `preview_view` and `apply_view` compile on the current view's snapshot when its graphs are the same, else
-  read a new one. `apply_view` answers `{ok, counts, viewEventId}`; `undo_view` `{ok, viewEventId,
-  undoOf}`. Undo's `data-view` carries the restored spec, the summary `Undo: <summary>`, and in `undoOf`
-  the id of the event it undoes. The undo history is the agent's applies in this session; the page's own
-  edits between turns replace `current` but not the history.
-- The session (`ViewSession`): `owner`, `id`, `secret` (`secrets.token_urlsafe(32)`, compared in constant
-  time, never in `repr`), `current`, `history`, and `events`, a `queue.Queue` of `data-view` payloads that
-  the bridge drains into the stream. The bridge calls `set_current(view)` with the request's `view` before a
-  turn. The system prompt for the harness is `adapters/visualization/agent_instructions.md`.
+  the index (`search_concepts`, `list_concepts`, `describe_concept`), as a card shows it with
+  `class-inheritance` selected.
+- `get_current_view` uses the page's compilation when the service still holds it for the same spec and
+  owner, else compiles the spec tolerantly (it is what the page shows). A node lists at most 50 member IRIs
+  and carries `memberCount`; `edgesOmitted` counts edges past 400. `get_catalog` gives `presets:
+  ["domain"]`, the values of `presentation.preset`.
+- `preview_view` and `apply_view` compile on the current view's snapshot when it is the same owner's and of
+  the same graphs, else read a new one. `undo_view` answers `{ok, viewEventId, undoOf}`. Undo's `data-view`
+  carries the restored spec and its owner, the summary `Undo: <summary>`, and in `undoOf` the id of the event
+  it undoes. The undo history is the agent's applies in this session; the page's own edits between turns
+  replace `current` but not the history.
+- The session (`ViewSession`): `owner` (optional, unused since ONTO-49), `id`, `secret`
+  (`secrets.token_urlsafe(32)`, compared in constant time, never in `repr`), `current` (`{owner, spec,
+  compileId, picked}`), `history`, and `events`, a `queue.Queue` of `data-view` payloads that the bridge
+  drains into the stream. The bridge calls `set_current(view)` with the request's `view` before a turn. The
+  system prompt for the harness is `adapters/visualization/agent_instructions.md`: the order of work
+  (current view, then `list_concepts` or one batched `search_concepts`, `describe_concept` only when needed,
+  preview, apply with the owner), a budget of about 5–8 calls, English queries next to the user's words.
 
 **`data-view` chunk.**
 
 ```json
-{"type": "data-view", "id": "<viewEventId>", "data": {"spec": {}, "summary": "...", "undoOf": null}}
+{"type": "data-view", "id": "<viewEventId>", "data": {"spec": {}, "summary": "...", "undoOf": null, "owner": "<owner>"}}
 ```
 
-The page shows it as an entry with an undo button. It also applies the spec through its usual compile path,
-reusing the snapshot when the scope is unchanged, and lays the view out again.
+The page shows it as an entry with an undo button. When `owner` differs from the page's, the page switches to
+that owner, keeping the chat. It then applies the spec through its usual compile path, reusing the snapshot
+when the scope is unchanged, and lays the view out again.
 
 - If the spec has no `arrangement`, the page keeps its own.
 - The `id` must be unique within a session: the page keys the entry, and the spec to undo to, on it.
@@ -358,6 +395,10 @@ the cards land.
   from the page's, the page switches to that owner, keeping the chat, and then applies the spec.
 - The Agent tab has no owner choice; the Settings tab keeps it.
 
+Status: the service side has landed (§2, §4: sessions, the owner of a view and of an apply, the catalog
+across owners, the index over every owner's graphs and its version choice). The page side is ONTO-49's
+other half.
+
 **Models (ONTO-47).**
 
 - `GET agent/harnesses`: each harness gains
@@ -384,3 +425,12 @@ the cards land.
 - Failures say what to do next.
 - The instructions give a budget of about 5–8 calls per request, and prefer `list_concepts` and batched
   queries.
+
+Status: landed, as §4 describes, with these additions: `owners` filters both tools; a hit carries `owner`
+and `match` (`exact`, `label`, `text`); matching is also without accents and finds plurals and inflections
+through a stem; the page's `POST search` matches the same way (`core/views/match.py`). Checked on the hub
+of 2026-11-10 (4 available owners, about 1,600 concepts): `get_catalog` 2.9 s cold (it reads the index),
+6.8 kB; later calls about 0.03 s. `list_concepts` of one owner's level about 8 kB; the whole of the largest
+owner (meta-harness, 1,015 concepts) 3 pages, about 165 kB (some 41k tokens), so the instructions point to
+`owners` and `levels`. The owner's request about agent sessions took 4 tool calls with Claude (sonnet), none
+failed.
