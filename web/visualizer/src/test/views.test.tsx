@@ -154,25 +154,25 @@ it('the manual editor sets the orientation that is saved', async () => {
 it('Group by goes into the saved spec and its layout, and opens again the same way', async () => {
   await diagram();
   const select = () => screen.getByLabelText('group by') as HTMLSelectElement;
-  expect(select().value).toBe('level>graph');                                    // the default
+  expect(select().value).toBe('level>category');                                 // the default: levels, then gUFO types
   expect(reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec).not.toHaveProperty('presentation.arrangement');
-  fireEvent.change(select(), { target: { value: 'level>category' } });
+  fireEvent.change(select(), { target: { value: 'category' } });
   expect(screen.getByText('Show diagram')).toBeTruthy();
   expect(screen.queryByLabelText('pending')).toBeNull();                          // drawn at once, like orientation
   fireEvent.change(screen.getByLabelText('view title'), { target: { value: 'By category' } });
   fireEvent.click(screen.getByText('Save'));
   await screen.findByText(/Saved as “By category”/);
   const spec = reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec as { presentation: { arrangement?: string[] } };
-  expect(spec.presentation.arrangement).toEqual(['level', 'category']);
+  expect(spec.presentation.arrangement).toEqual(['category']);
   const put = reqs.find((r) => r.method === 'PUT')!;
-  expect((put.body!.layout as { engine: string }).engine).toBe('elkjs-0.12.0/layered+lanes:level>category');
+  expect((put.body!.layout as { engine: string }).engine).toBe('elkjs-0.12.0/layered+lanes:category');
   stored = { artifactVersion: 1, revision: 1, spec: spec as Artifact['spec'], layout: put.body!.layout as Artifact['layout'],
              manifest: compilation('x').manifest, baseline: {} };
   revision = 1;
   fireEvent.change(screen.getByLabelText('owner'), { target: { value: 'study' } });
   fireEvent.click(await within(await screen.findByLabelText('saved views')).findByText('By category'));
   await screen.findByText(/By category \(rev 1\)/);
-  expect(select().value).toBe('level>category');
+  expect(select().value).toBe('category');
 });
 
 it('a view saved before arrangements opens with or without lanes as its layout says', async () => {

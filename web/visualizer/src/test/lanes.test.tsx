@@ -4,7 +4,7 @@ import ELK from 'elkjs/lib/elk.bundled.js';
 import type { ElkNode } from 'elkjs/lib/elk-api';
 import { describe, expect, it } from 'vitest';
 import { Canvas, ENGINE, LANES_ENGINE } from '../Canvas';
-import { arrange, arrangementOfEngine, bands, categoryOf, engineFor, graphBoxes, laneGraphs, laneHandles, lanesOf, stackLanes } from '../lanes';
+import { arrange, arrangementOfEngine, bands, categoryOf, engineFor, graphBoxes, laneGraphs, laneHandles, lanesOf, LEGACY_LANES, stackLanes } from '../lanes';
 import type { Compilation, DEdge, DNode } from '../types';
 import { compilation } from './fixtures';
 
@@ -23,7 +23,7 @@ const NODES = [n('a1', 'application', 'p/one'), n('a2', 'application', 'p/one'),
 const EDGES = [e('a1', 'a2'), e('d1', 'd2'), e('a1', 'd1', 'kit-mapping'), e('a2', 'a3')];
 
 async function laidOut(direction: 'RIGHT' | 'DOWN') {
-  const { lanes, graphs } = laneGraphs(NODES, EDGES, new Map(), direction, ORDER);
+  const { lanes, graphs } = laneGraphs(NODES, EDGES, new Map(), direction, ORDER, LEGACY_LANES);
   const elk = new ELK();
   return { lanes, graphs, result: stackLanes(lanes, await Promise.all(graphs.map((g) => elk.layout(g))), direction) };
 }
@@ -42,7 +42,7 @@ describe('level lanes', () => {
   });
 
   it('gives ELK each lane alone, with only the edges inside one box', () => {
-    const { graphs } = laneGraphs(NODES, EDGES, new Map(), 'RIGHT', ORDER);
+    const { graphs } = laneGraphs(NODES, EDGES, new Map(), 'RIGHT', ORDER, LEGACY_LANES);
     const app = graphs[1];
     expect(app.id).toBe('lane:application');
     expect(app.children!.map((c) => c.id)).toEqual(['box:application|p/one', 'box:application|p/two']);
@@ -77,7 +77,7 @@ describe('level lanes', () => {
 describe('lane layout details', () => {
   it('lays a box out in the chosen direction too', async () => {
     const ns = [n('a', 'application', 'p/one'), n('b', 'application', 'p/one'), n('c', 'application', 'p/two')];
-    const { lanes, graphs } = laneGraphs(ns, [e('a', 'b')], new Map(), 'LEFT', ORDER);
+    const { lanes, graphs } = laneGraphs(ns, [e('a', 'b')], new Map(), 'LEFT', ORDER, LEGACY_LANES);
     const { boxes } = stackLanes(lanes, [await new ELK().layout(graphs[0])], 'LEFT');
     expect(boxes.get('a')!.x).toBeGreaterThan(boxes.get('b')!.x);     // the relation runs right to left
   });
@@ -105,8 +105,16 @@ describe('lanes on the canvas', () => {
     fireEvent.click(screen.getByText('Auto layout'));               // jsdom measures no card, so nothing starts it
     await waitFor(() => expect(graphs.map((g) => g.id)).toEqual(['lane:domain', 'lane:application', 'lane:other']));
     await screen.findByLabelText('level domain');
-    expect(screen.getByLabelText('graph p/two')).toBeTruthy();
-    expect((screen.getByLabelText('group by') as HTMLSelectElement).value).toBe('level>graph');   // a spec without an arrangement
+    expect((screen.getByLabelText('group by') as HTMLSelectElement).value).toBe('level>category');   // a new view
+  });
+  it('a view saved with the old lanes opens with them: level lanes, graph boxes', async () => {
+    const graphs: ElkNode[] = [];
+    const engine = (g: ElkNode) => { graphs.push(g); return new ELK().layout(g); };
+    render(<ReactFlowProvider><Canvas compilation={comp()} picked={[]} onPick={() => {}} engine={engine} defaultLanes
+      levelOrder={ORDER} initialLayout={{ positions: {}, pinned: [], viewport: null, engine: LANES_ENGINE }} /></ReactFlowProvider>);
+    expect((screen.getByLabelText('group by') as HTMLSelectElement).value).toBe('level>graph');
+    fireEvent.click(screen.getByText('Auto layout'));
+    expect(await screen.findByLabelText('graph p/two')).toBeTruthy();
   });
   it('a saved layout without lanes keeps them off', async () => {
     const graphs: ElkNode[] = [];
@@ -147,7 +155,7 @@ describe('arrangement by gUFO category', () => {
     const a = arrange(ns, ['category'], ORDER)!;
     expect(a.lanes.map((l) => [l.label, l.members])).toEqual([
       ['Kind', ['k2', 'k1']], ['Role', ['role']], ['Mixin', ['mix']], ['Relator', ['rel']], ['EventType', ['ev']],
-      ['SituationType', ['sit']], ['AbstractIndividualType', ['ab']], ['mixed', ['agg']], ['no category', ['none']]]);
+      ['SituationType', ['sit']], ['AbstractIndividualType', ['ab']], ['mixed types', ['agg']], ['no gUFO type', ['none']]]);
     expect(a.boxes.size).toBe(0);
   });
 
@@ -203,7 +211,7 @@ describe('arrangement by gUFO category', () => {
     const at = out.children!.map((x) => ({ id: x.id.split('|')[1], x: x.x!, y: x.y! }));
     const reading = [...at].sort((p, q) => p.y - q.y || p.x - q.x).map((p) => p.id);   // row by row, left to right
     expect(reading).toEqual(['Kind', 'Role', 'Relator', 'EventType', 'SituationType', 'AbstractIndividualType']);
-    expect(laneGraphs(NODES, EDGES, new Map(), 'RIGHT', ORDER).graphs.every((g) => !g.layoutOptions!['elk.layered.considerModelOrder.components'])).toBe(true);
+    expect(laneGraphs(NODES, EDGES, new Map(), 'RIGHT', ORDER, LEGACY_LANES).graphs.every((g) => !g.layoutOptions!['elk.layered.considerModelOrder.components'])).toBe(true);
   });
 
   it('category then level, graph alone, group, and no grouping', () => {
@@ -216,16 +224,17 @@ describe('arrangement by gUFO category', () => {
     expect(arrange(ns, ['graph'], ORDER)!.lanes.map((l) => [l.key, l.members]))
       .toEqual([['g/one', ['k1', 'k2']], ['g/two', ['r']], ['mixed', ['aggregate:g']]]);
     expect(arrange(ns, ['group'], ORDER)!.lanes.map((l) => [l.label, l.members]))
-      .toEqual([['Project', ['aggregate:g']], ['in no group', ['k1', 'k2', 'r']]]);
+      .toEqual([['Project', ['aggregate:g']], ['not in a group', ['k1', 'k2', 'r']]]);
+    expect([...arrange(ns, ['level', 'group'], ORDER)!.boxes.keys()]).toEqual(['aggregate:g']);   // loose cards get no "not in a group" box
     expect(arrange(ns, [], ORDER)).toBeNull();
   });
 
-  it('the default arrangement is today\'s: level lanes, graph boxes only in a lane of several graphs', () => {
-    const a = arrange(NODES, ['level', 'graph'], ORDER)!;
+  it('the old lanes: level lanes, graph boxes only in a lane of several graphs; a new view: levels, then gUFO types', () => {
+    const a = arrange(NODES, LEGACY_LANES, ORDER)!;
     expect(a.lanes).toEqual(lanesOf(NODES, ORDER));
     expect(Object.fromEntries(a.boxes)).toEqual({ a1: 'application|p/one', a2: 'application|p/one', a3: 'application|p/two' });
     expect(laneGraphs(NODES, EDGES, new Map(), 'RIGHT', ORDER).graphs)
-      .toEqual(lanesOf(NODES, ORDER).map((l) => laneGraphs(NODES, EDGES, new Map(), 'RIGHT', ORDER, ['level', 'graph']).graphs.find((g) => g.id === `lane:${l.key}`)));
+      .toEqual(laneGraphs(NODES, EDGES, new Map(), 'RIGHT', ORDER, ['level', 'category']).graphs);
   });
 
   it('a saved layout records the arrangement, and an old one still reads as lanes or none', () => {
@@ -258,11 +267,14 @@ describe('Group by on the canvas', () => {
       levelOrder={ORDER} layoutRef={layoutRef} onArrangement={(a) => chosen.push(a)} /></ReactFlowProvider>);
     const select = screen.getByLabelText('group by') as HTMLSelectElement;
     expect([...select.options].map((o) => o.textContent)).toEqual(expect.arrayContaining(
-      ['Level', 'Level → category', 'Level → graph', 'Category', 'Category → level', 'Graph', 'None']));
+      ['Levels, then gUFO types', 'Levels', 'Levels, then graphs', 'gUFO types', 'gUFO types, then levels', 'Graphs', 'No grouping',
+       'Groups (this view has no groups)']));
+    expect([...select.options].find((o) => o.value === 'group')!.disabled).toBe(true);
+    fireEvent.change(select, { target: { value: 'level' } });
     fireEvent.change(select, { target: { value: 'level>category' } });
-    expect(chosen).toEqual([['level', 'category']]);
-    await waitFor(() => expect(graphs.map((g) => g.id)).toEqual(['lane:domain', 'lane:task']));
-    expect(graphs[0].children!.map((x) => x.id)).toEqual(['box:domain|Kind', 'box:domain|Role']);
+    expect(chosen).toEqual([['level'], ['level', 'category']]);
+    await waitFor(() => expect(graphs.slice(-2).map((g) => g.id)).toEqual(['lane:domain', 'lane:task']));
+    await waitFor(() => expect(graphs.at(-2)!.children!.map((x) => x.id)).toEqual(['box:domain|Kind', 'box:domain|Role']));
     await screen.findByLabelText('category Kind');
     expect(screen.getByLabelText('category EventType')).toBeTruthy();
     expect(layoutRef.current!().engine).toBe(`${LANES_ENGINE}:level>category`);

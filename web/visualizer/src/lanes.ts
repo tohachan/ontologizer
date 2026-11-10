@@ -15,7 +15,10 @@ export const MIXED = 'mixed';
 export const LANE_GAP = 60;
 const LANE_PAD = { label: 104, side: 24 };
 
-export const DEFAULT_ARRANGEMENT: ArrangeKey[] = ['level', 'graph'];
+// A new view: a lane per level, a box per gUFO type inside it (the owner's choice, 2026-11-10).
+export const DEFAULT_ARRANGEMENT: ArrangeKey[] = ['level', 'category'];
+// What `+lanes` meant before arrangements were chosen: level lanes, graph boxes in mixed lanes.
+export const LEGACY_LANES: ArrangeKey[] = ['level', 'graph'];
 export type Lane = { key: string; label: string; members: string[] };   // top-level node ids
 // What the canvas draws for an arrangement: the lanes, the box key of each boxed top-level node, the
 // boxes' labels, and the grouping keys.
@@ -86,18 +89,18 @@ function keying(key: ArrangeKey, nodes: DNode[], order: string[]): Keying {
     case 'category': {
       const rank = (v: string) => { const i = CATEGORY_ORDER.indexOf(v); return i >= 0 ? i : CATEGORY_ORDER.length + last(v); };
       return { value: lift((n) => (n.categories.length ? categoryOf(n.categories) : n.kind === 'aggregate' ? null : OTHER)),
-               rank, label: (v) => (v === OTHER ? 'no category' : v) };
+               rank, label: (v) => (v === OTHER ? 'no gUFO type' : v === MIXED ? 'mixed types' : v) };
     }
     case 'graph':
       return { value: lift((n) => n.graph ?? (n.kind === 'aggregate' ? null : OTHER)), rank: last,
-               label: (v) => (v === OTHER ? 'no graph' : v) };
+               label: (v) => (v === OTHER ? 'no graph' : v === MIXED ? 'several graphs' : v) };
     case 'group': {
       // the spec's groups in their order (an area or an aggregate each), the cards in none last
       const groups = nodes.filter((n) => !n.parent && (n.kind === 'area' || n.kind === 'aggregate'));
       const title = new Map(groups.map((g) => [g.id, g.label]));
       return { value: (n) => (title.has(n.id) ? n.id : OTHER),
                rank: (v) => (title.has(v) ? groups.findIndex((g) => g.id === v) : groups.length + 1),
-               label: (v) => title.get(v) ?? 'in no group' };
+               label: (v) => title.get(v) ?? 'not in a group' };
     }
   }
 }
@@ -121,7 +124,10 @@ export function arrange(nodes: DNode[], arrangement: ArrangeKey[], order: string
     for (const lane of lanes) {
       // a graph box only in a lane of several graphs, around its concepts: a lane of one graph is that graph
       const boxed = inner === 'graph' ? graphBoxes(nodes, lane)
-        : new Map(lane.members.map((id) => [id, `${lane.key}|${ki.value(of.get(id)!)}`]));
+        : new Map(lane.members.map((id) => [id, ki.value(of.get(id)!)] as const)
+            // a group is its own frame: the cards in none sit loose, with no "in no group" box around them
+            .filter(([, v]) => !(inner === 'group' && v === OTHER))
+            .map(([id, v]) => [id, `${lane.key}|${v}`]));
       // members in box order, so ELK gets the boxes in the key's order
       const value = (id: string) => boxed.get(id)?.slice(lane.key.length + 1) ?? '';
       lane.members = [...lane.members].sort((a, b) => (boxed.has(a) ? 0 : 1) - (boxed.has(b) ? 0 : 1)
@@ -261,14 +267,14 @@ const KEYS: ArrangeKey[] = ['level', 'graph', 'category', 'group'];
 // arrangement other than the default), so that an older reader still sees that lanes were used.
 export function engineFor(arrangement: ArrangeKey[]): string {
   if (!arrangement.length) return ENGINE;
-  return same(arrangement, DEFAULT_ARRANGEMENT) ? LANES_ENGINE : `${LANES_ENGINE}:${arrangement.join('>')}`;
+  return same(arrangement, LEGACY_LANES) ? LANES_ENGINE : `${LANES_ENGINE}:${arrangement.join('>')}`;
 }
 
 // The arrangement a saved layout was made with, for a spec that does not say; undefined when it cannot tell.
 export function arrangementOfEngine(engine: string | undefined): ArrangeKey[] | undefined {
   if (!engine) return undefined;
   if (engine === ENGINE) return [];
-  if (engine === LANES_ENGINE) return DEFAULT_ARRANGEMENT;
+  if (engine === LANES_ENGINE) return LEGACY_LANES;
   if (engine.startsWith(`${LANES_ENGINE}:`)) {
     const keys = engine.slice(LANES_ENGINE.length + 1).split('>') as ArrangeKey[];
     if (keys.every((k) => KEYS.includes(k))) return keys;

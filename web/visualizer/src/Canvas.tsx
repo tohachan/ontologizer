@@ -5,7 +5,7 @@ import {
 import type { ElkPoint } from 'elkjs/lib/elk-api';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fromElk, toElk, type Box, type LayoutResult, type Size } from './elkGraph';
-import { arrange, arrangementOfEngine, bands, DEFAULT_ARRANGEMENT, engineFor, laneGraphs, laneHandles, stackLanes } from './lanes';
+import { arrange, arrangementOfEngine, bands, DEFAULT_ARRANGEMENT, engineFor, LEGACY_LANES, laneGraphs, laneHandles, stackLanes } from './lanes';
 import { edgeTypes } from './edges';
 import { edgeText } from './format';
 import { focusOf, reconcile, sameEdge, sameNode } from './focus';
@@ -29,17 +29,19 @@ type Props = {
 };
 export { ENGINE, LANES_ENGINE } from './lanes';
 // The Group by choices: the arrangement each writes into the spec.
+// The Group by choices: the arrangement each writes into the spec. Lanes come from the first key, boxes inside
+// a lane from the second. The ones by group need groups in the view.
 export const GROUP_BY: { label: string; value: ArrangeKey[] }[] = [
-  { label: 'Level', value: ['level'] },
-  { label: 'Level → category', value: ['level', 'category'] },
-  { label: 'Level → graph', value: DEFAULT_ARRANGEMENT },
-  { label: 'Level → group', value: ['level', 'group'] },
-  { label: 'Category', value: ['category'] },
-  { label: 'Category → level', value: ['category', 'level'] },
-  { label: 'Graph', value: ['graph'] },
-  { label: 'Graph → category', value: ['graph', 'category'] },
-  { label: 'Group', value: ['group'] },
-  { label: 'None', value: [] },
+  { label: 'Levels, then gUFO types', value: DEFAULT_ARRANGEMENT },
+  { label: 'Levels', value: ['level'] },
+  { label: 'Levels, then graphs', value: LEGACY_LANES },
+  { label: 'Levels, then groups', value: ['level', 'group'] },
+  { label: 'gUFO types', value: ['category'] },
+  { label: 'gUFO types, then levels', value: ['category', 'level'] },
+  { label: 'Graphs', value: ['graph'] },
+  { label: 'Graphs, then gUFO types', value: ['graph', 'category'] },
+  { label: 'Groups', value: ['group'] },
+  { label: 'No grouping', value: [] },
 ];
 const keyOf = (a: ArrangeKey[]) => a.join('>');
 const AREA_PAD = { top: 40, side: 16, bottom: 16 };
@@ -65,7 +67,10 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
   // the spec's arrangement wins; a spec without one opens as its saved layout was made, else as the default
   const [chosen, setChosen] = useState<ArrangeKey[]>(() => arrangementOfEngine(initialLayout?.engine)
     ?? (defaultLanes ? DEFAULT_ARRANGEMENT : []));
-  const groupBy = keyOf(arrangement ?? chosen);              // a string, so an equal list is no new layout
+  // grouping by the view's groups needs groups: without any, the view is arranged as a new one is
+  const hasGroups = compilation.diagram.nodes.some((n) => n.kind === 'area' || n.kind === 'aggregate');
+  const wanted = arrangement ?? chosen;
+  const groupBy = keyOf(wanted.includes('group') && !hasGroups ? DEFAULT_ARRANGEMENT : wanted);   // a string: an equal list is no new layout
   const keys = useMemo(() => (groupBy ? groupBy.split('>') as ArrangeKey[] : []), [groupBy]);
   const setGroupBy = (a: ArrangeKey[]) => { setChosen(a); onArrangement?.(a); };
   const flow = useReactFlow();
@@ -303,7 +308,10 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
             const g = GROUP_BY.find((o) => keyOf(o.value) === e.target.value);
             if (g) setGroupBy(g.value);
           }}>
-            {GROUP_BY.map((o) => <option key={o.label} value={keyOf(o.value)}>{o.label}</option>)}
+            {GROUP_BY.map((o) => {
+              const off = o.value.includes('group') && !hasGroups;
+              return <option key={o.label} value={keyOf(o.value)} disabled={off}>{o.label}{off ? ' (this view has no groups)' : ''}</option>;
+            })}
             {!GROUP_BY.some((o) => keyOf(o.value) === groupBy) &&
               <option value={groupBy}>{keys.map((k) => k[0].toUpperCase() + k.slice(1)).join(' → ')}</option>}
           </select></label>
