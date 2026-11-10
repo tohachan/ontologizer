@@ -258,6 +258,18 @@ def test_each_read_is_a_new_snapshot():
 
 def test_facade_exposes_no_way_to_write():
     public = {n for n in dir(ScopedReader) if not n.startswith("_")}
-    assert public == {"read"}
+    assert public == {"read", "graph_iris"}
     snap_public = {n for n in dir(ScopedReader(Stub()).read([A])) if not n.startswith("_")}
     assert not snap_public & {"update", "replace_graph", "add_to_graph", "remove_from_graph", "drop_graph", "engine"}
+
+
+def test_graph_iris_lists_the_stores_graphs():
+    e = Stub([{"g": f"<{B}>"}, {"g": f"<{A}>"}])
+    assert ScopedReader(e).graph_iris() == [A, B]
+    assert "DISTINCT ?g" in e.calls[0][0]
+
+
+@pytest.mark.parametrize("bad", [[{"g": None}], [{"g": "_:b"}], ["x"]], ids=["null", "blank", "not-a-row"])
+def test_graph_iris_refuses_a_malformed_answer(bad):
+    with pytest.raises(EngineError):
+        ScopedReader(Stub(bad)).graph_iris()

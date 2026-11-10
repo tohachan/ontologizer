@@ -21,6 +21,7 @@ _IRI_TERM = re.compile(r"<[^\s<>\"{}|^`\\]+>")
 _SUBJECT_TERM = re.compile(rf"{_IRI_TERM.pattern}|_:\S+")
 _OBJECT_TERM = re.compile(rf'{_SUBJECT_TERM.pattern}|"(?:[^"\\\n\r]|\\.)*"(?:@[A-Za-z0-9-]+|\^\^{_IRI_TERM.pattern})?')
 _FIELDS = ("g", "s", "p", "o")
+MAX_GRAPHS = 10_000
 
 
 class ScopeTooLarge(Exception):
@@ -56,6 +57,24 @@ class ScopedReader:
     def __init__(self, engine: BoundedSelect, limits: Limits = Limits()):
         self._engine = engine
         self._limits = limits
+
+    def graph_iris(self) -> list[str]:
+        """The named graphs of the store, for the catalog."""
+        limits = self._limits
+        sparql = f"SELECT DISTINCT ?g WHERE {{ GRAPH ?g {{ ?s ?p ?o }} }} LIMIT {MAX_GRAPHS + 1}"
+        try:
+            rows = self._engine.select_bounded(sparql, limits.max_bytes, limits.timeout)
+        except ResponseTooLarge:
+            raise ScopeTooLarge("bytes", limits.max_bytes) from None
+        if len(rows) > MAX_GRAPHS:
+            raise ScopeTooLarge("graphs", MAX_GRAPHS)
+        out = []
+        for row in rows:
+            g = row.get("g") if isinstance(row, dict) else None
+            if not isinstance(g, str) or not _IRI_TERM.fullmatch(g):
+                raise EngineError("query: a graph name is malformed")
+            out.append(g[1:-1])
+        return sorted(out)
 
     def read(self, graphs: Iterable[str]) -> Snapshot:
         selected = tuple(sorted(set(graphs)))

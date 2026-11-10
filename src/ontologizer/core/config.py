@@ -44,9 +44,14 @@ DEFAULT_PATHS = {lv: f"ontology/{lv}" for lv in ("domain", "task", "variation", 
 
 def read_hub(hub_dir: Path) -> dict:
     """Hub config merged with its local overlay: the owner registry (`projects:`)
-    and any store override are per machine, so they never live in the kit's git."""
+    and any store override are per machine, so they never live in the kit's git.
+    A git worktree without its own overlay uses the main checkout's."""
     data = yaml.safe_load((hub_dir / "ontologizer.yaml").read_text()) or {}
     local = hub_dir / LOCAL
+    if not local.is_file():
+        twin = _main_checkout_twin(hub_dir)
+        if twin is not None:
+            local = twin / LOCAL
     if local.is_file():
         over = yaml.safe_load(local.read_text()) or {}
         data["projects"] = {**(data.get("projects") or {}), **(over.get("projects") or {})}
@@ -117,11 +122,13 @@ class Config:
             self.kit_root = self.root
 
     @classmethod
-    def load(cls, path: str | Path | None = None) -> "Config":
+    def load(cls, path: str | Path | None = None, hub: str | Path | None = None) -> "Config":
+        """`hub` overrides an owner config's `hub:` and `$ONTOLOGIZER_HUB`: a reader of several owners
+        loads them all against its own hub, wherever their `hub:` lines point."""
         path = Path(path).resolve() if path else find()
         data = yaml.safe_load(path.read_text()) or {}
         if "hub" in data:
-            return cls._load_project(path, data)
+            return cls._load_project(path, data, Path(hub).resolve() if hub else None)
         return cls._load_hub(path, read_hub(path.parent))
 
     @staticmethod
@@ -157,10 +164,11 @@ class Config:
         return cfg
 
     @classmethod
-    def _load_project(cls, path: Path, data: dict) -> "Config":
+    def _load_project(cls, path: Path, data: dict, hub_dir: Path | None = None) -> "Config":
         root = path.parent
-        hub_dir = Path(os.environ["ONTOLOGIZER_HUB"]).resolve() if os.environ.get("ONTOLOGIZER_HUB") \
-            else _resolve_dir(root, data["hub"], "ontologizer.yaml")
+        if hub_dir is None:
+            hub_dir = Path(os.environ["ONTOLOGIZER_HUB"]).resolve() if os.environ.get("ONTOLOGIZER_HUB") \
+                else _resolve_dir(root, data["hub"], "ontologizer.yaml")
         if hub_dir is None:
             raise FileNotFoundError(f"hub {data['hub']!r} from {path} not found; set ONTOLOGIZER_HUB")
         hub = read_hub(hub_dir)
