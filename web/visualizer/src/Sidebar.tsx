@@ -21,6 +21,7 @@ type Props = {
   onSearch: (q: string) => void; hits: SearchHit[]; searching: boolean;
   onCompile: () => void; busy: boolean; onUnhide: (iri: string) => void; children?: ReactNode;
   facts?: ScopeFacts | null;                             // of the last diagram, when it has this scope
+  onOverview?: (version: string) => void;
   hiddenByRule?: number;
 };
 
@@ -51,6 +52,11 @@ export function Sidebar(p: Props) {
       {p.children}
       {p.owner && (
         <>
+          {p.onOverview && (
+            <button type="button" onClick={() => p.onOverview!(version)} disabled={p.busy}
+                    title="all levels of this owner's graphs, with the graphs their mappings point to as context">
+              Overview of all levels</button>
+          )}
           <fieldset><legend>Graphs of this owner</legend>
             {versions.length > 1 && (
               <label className="row">Version <select aria-label="version" value={version}

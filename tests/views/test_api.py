@@ -437,3 +437,19 @@ def test_scope_facts_name_the_graph_a_mapping_points_to(tmp_path):
     assert [e["kind"] for e in with_release["diagram"]["edges"]] == ["kit-mapping"]
     one_level = run(["shared/domain@0.1"], levels=["application"])     # the target's level is not selected
     assert one_level["diagram"]["edges"] == [] and one_level["diagram"]["counts"]["hiddenByRule"] == 1
+
+
+def test_overview_reads_the_release_its_mappings_point_to_and_compiles(tmp_path):
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    app = Visualizer(Owners(hub), ScopedReader(RowEngine(MAPPED), Limits()), Settings(allowed_hosts=(HOST,)))
+    status, body = call(app, "POST", "overview", {"owner": "study"})
+    assert status == 200, body
+    spec = body["spec"]
+    assert body["mappingTargets"] == {"shared/domain@0.1": 1}
+    # shared/domain is the owner's own working graph, so its release cannot join: the mapping stays outside
+    assert "shared/domain@0.1" not in spec["scope"]["contextGraphs"]
+    status, c = call(app, "POST", "compile", {"owner": "study", "spec": spec, "snapshotId": body["snapshotId"]})
+    assert status == 200 and c["scopeFacts"]["outside"][0]["instead"] == "shared/domain"
+    assert call(app, "POST", "overview", {"owner": "study", "version": "9.9"})[0] == 422
+    assert call(app, "POST", "overview", {"owner": "study", "languages": "en"})[0] == 400

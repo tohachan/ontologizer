@@ -23,6 +23,7 @@ from rdflib import URIRef
 
 from ontologizer.adapters.visualization.serialize import term, to_json
 from ontologizer.core.levels import Preset
+from ontologizer.core.views.builders import context_for, overview_spec, target_graphs
 from ontologizer.core.views.project import (COMPILER_VERSION, DiagramModel, DisplayLimitExceeded, compile_view,
                                              scope_facts)
 from ontologizer.core.views.reader import choose_label, read_model
@@ -184,7 +185,10 @@ class Visualizer:
                 return 200, self.save(vid, payload)
             case ("POST", ["plan"]):
                 return 200, self.plan(payload)
-            case (_, ["health"] | ["catalog"] | ["search"] | ["compile"] | ["plan"] | ["views"] | ["views", _]):
+            case ("POST", ["overview"]):
+                return 200, self.overview(payload)
+            case (_, ["health"] | ["catalog"] | ["search"] | ["compile"] | ["plan"] | ["overview"] | ["views"]
+                  | ["views", _]):
                 raise ApiError(405, "method-not-allowed", f"{method} is not supported here")
         raise ApiError(404, "not-found", "no such endpoint")
 
@@ -286,17 +290,50 @@ class Visualizer:
         except OutOfScope as e:
             raise ApiError(422, "out-of-scope", str(e)) from None
 
+    def _term_graph(self, cfg):
+        """The catalog graph whose term namespace an IRI is in (the longest match), or None."""
+        ns = sorted(((cfg.term_ns(g.path), g.path) for g in catalog(cfg, self._graphs())), key=lambda x: -len(x[0]))
+        return lambda iri: next((p for prefix, p in ns if iri.startswith(prefix)), None)
+
+    def overview(self, body: dict) -> dict:
+        """An overview ViewSpec of an owner's graphs at one version (core/views/builders.py): the client
+        compiles it like any other, on the snapshot returned here."""
+        cfg = self._config(body.get("owner"))
+        version = body.get("version", "working")
+        if not isinstance(version, str) or not version:
+            raise ApiError(400, "bad-request", "version is 'working' or a release")
+        languages = body.get("languages", ["en", "ru"])
+        if not isinstance(languages, list) or not 1 <= len(languages) <= 8 or not all(isinstance(x, str) for x in languages):
+            raise ApiError(400, "bad-request", "languages is a list of 1 to 8 language tags")
+        graphs = catalog(cfg, self._graphs())
+        own = [g.path for g in graphs if g.owner is not None and g.owner == cfg.project
+               and (g.release or "working") == version]
+        if not own:
+            raise ApiError(422, "out-of-scope", f"{cfg.project!r} has no graphs at version {version!r}")
+        kit = [g.path for g in graphs if g.owner is None and g.release is None]
+        first = self._scope(cfg, own, kit)
+        _, model = self._snapshot(first, None)
+        wanted = target_graphs(model, first, self._term_graph(cfg))
+        context = sorted(kit + context_for([*first.primary, *first.context], wanted, {g.path: g for g in graphs}))
+        scope = self._scope(cfg, own, context)
+        snap, model = self._snapshot(scope, None)
+        try:
+            spec = overview_spec(scope, model, Preset.load(cfg.preset_path).level_ids, languages=languages)
+        except SpecError as e:
+            raise ApiError(400, "bad-request", str(e)) from None
+        return {"spec": spec, "snapshotId": snap.id, "mappingTargets": wanted}
+
     def _facts(self, cfg, scope: Scope, model) -> dict:
         """Per relationship kind: how many the scope holds from its primary concepts, and how many point to a
         concept outside it, by the graph whose namespace the target is in (None when no known graph's is)."""
         known = {g.path for g in catalog(cfg, self._graphs())}
-        ns = sorted(((cfg.term_ns(p), p) for p in known), key=lambda x: -len(x[0]))
+        graph_of = self._term_graph(cfg)
         read = {g.path for g in (*scope.primary, *scope.context)}
         kinds, outside = [], {}
         for f in scope_facts(scope, model):
             kinds.append({"kind": f.kind, "inScope": f.in_scope, "outside": sum(f.outside.values())})
             for target, n in f.outside.items():
-                graph = next((p for prefix, p in ns if target.startswith(prefix)), None)
+                graph = graph_of(target)
                 key = (graph, f.kind)
                 outside[key] = outside.get(key, 0) + n
         version = {p.partition("@")[0]: p for p in read}

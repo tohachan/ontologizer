@@ -194,6 +194,30 @@ export function App() {
     if (!(await compileWith(s, x))) { setSel(before.s); setExtra(before.x); }
   }, [compileWith, sel, extra]);
 
+  // The overview is a spec built by the service (core/views/builders.py), compiled on the snapshot it read.
+  const overview = useCallback(async (version: string) => {
+    if (!owner) return;
+    const mine = ++request.current;
+    setBusy(true); setError(null); setNotice(null);
+    try {
+      const r = await api.overview(owner, version, sel.languages);
+      if (mine !== request.current) return;
+      const { s, x } = fromSpec(r.spec, { ...START, languages: sel.languages });
+      snapshot.current = { key: scopeKey(r.spec.scope), id: r.snapshotId };
+      setSel(s); setExtra(x); setPicked([]); setFocus(null);
+      setOpened({ id: 'untitled', title: r.spec.title, revision: null }); setInitialLayout(null); setCanvasKey((k) => k + 1);
+      const c = await compileWith(s, x, { id: 'untitled', title: r.spec.title });
+      const shut = x.groups.filter((g) => g.collapsed).length;
+      if (c) setNotice(`Overview: every level of ${r.spec.scope.primaryGraphs.length} graph(s)` +
+        (Object.keys(r.mappingTargets).length ? `, with ${Object.keys(r.mappingTargets).join(', ')} read for the targets of mappings` : '') +
+        (shut ? `. Each application graph is one group: pick it and choose Expand to see its concepts.` : '.'));
+    } catch (e) {
+      if (mine === request.current) setError(describe(e));
+    } finally {
+      if (mine === request.current) setBusy(false);
+    }
+  }, [owner, sel.languages, compileWith]);
+
   // A planner proposal is a spec like any other: shown at once, saved only by Save.
   const [candidates, setCandidates] = useState<{ name: string; iris: string[] }[]>([]);
   const ask = useCallback(async (text: string) => {
@@ -286,7 +310,7 @@ export function App() {
                  levels={ownerCat?.levels ?? []} sel={sel} onChange={setSel} onSearch={search} hits={hits}
                  searching={searching} onCompile={compile} busy={busy} onUnhide={unhide}
                  facts={compilation && scopeKey(compilation.manifest.requested) === scopeKey(buildSpec(sel).scope) ? compilation.scopeFacts : null}
-                 hiddenByRule={compilation?.diagram.counts.hiddenByRule}>
+                 hiddenByRule={compilation?.diagram.counts.hiddenByRule} onOverview={(v) => void overview(v)}>
           {owner && catalog?.planner.enabled && sel.primary.length > 0 &&
             <Ask onAsk={(q) => void ask(q)} busy={busy} candidates={candidates}
                  onPick={(iri) => { setCandidates([]); void apply({ ...sel, seeds: [...sel.seeds.filter((x) => x.iri !== iri), { iri, label: iri.split(/[#/:]/).pop() ?? iri }] }, extra); }} />}

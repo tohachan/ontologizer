@@ -215,6 +215,17 @@ Required sections are:
 
 In version 1, each entity can belong to at most one group. Grouping by level or another property is a builder operation that expands to explicit memberships. This keeps the saved result reviewable and prevents new entities from appearing in a group unexpectedly on refresh.
 
+### Overview
+
+The overview is the first builder (`core/views/builders.py`), and the UI's "Overview of all levels" button runs it. Given an owner and a version, the service assembles an ordinary ViewSpec, and an agent can call the same route or function:
+
+- **Primary graphs:** every graph of the owner at that version.
+- **Context graphs:** the kit's graphs, plus the graphs that the targets of its mappings live in. A target's graph is found by its term namespace. Of several versions of one graph, the one most mappings point to wins. A graph is never added when a version of it is already in the scope.
+- **Selection:** every level of the preset, relations, mappings and inheritance, one hop.
+- **Groups:** one per application graph, with that graph's application concepts as members. The groups are collapsed when there are several, or when the single one has more than 100 concepts, so that the shared levels show as cards and each project as one aggregate with its mappings. If even that exceeds the display limit, every group is collapsed. Expanding a group shows its concepts.
+
+The result shows the level structure: the shared levels as cards in their lanes, each project as one card in the application lane, and the mappings between them. On the store at the time of writing, all four available owners fit, with 23 to 83 nodes. An owner with ten projects reaches the edge limit, and the mappings past it are counted as omitted.
+
 Example, using synthetic identifiers only:
 
 ```json
@@ -386,6 +397,7 @@ There is no server-side "active owner": one service serves every owner in the hu
 | `GET /visualizer/api/views` | Saved views of the named owner |
 | `GET /visualizer/api/views/{id}` | Saved ViewSpec, LayoutState, source manifest, baseline, and artifact revision |
 | `PUT /visualizer/api/views/{id}` | Validated view artifact with expected revision; return new revision |
+| `POST /visualizer/api/overview` | An owner and a version (`working` or a release): the overview ViewSpec of the owner's graphs at that version, the snapshot it was read on, and the graphs its mappings point to (see *Overview*). The client compiles it like any other spec |
 | `POST /visualizer/api/plan` | Natural language request plus current view context; return a validated proposed ViewSpec and semantic change summary. With the planner off: `planner-disabled` |
 
 Use a consistent error envelope containing `code`, `message`, `details`, and `requestId`. Distinguish invalid spec, unknown owner, missing source, out-of-scope reference, oversized scope, engine unavailability, upstream response error, expired snapshot, expired compilation, save conflict, and disabled planner. A failed engine call cannot return a successful empty diagram.

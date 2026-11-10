@@ -132,3 +132,29 @@ it('the inspector shows candidate mappings and the project\'s variation', async 
   await within(inspector).findByText('Ledger');
   expect(within(inspector).getByLabelText('variation').textContent).toContain('SQL');
 });
+
+it('the overview takes the service\'s spec and compiles it on the snapshot it read', async () => {
+  const spec = {
+    schemaVersion: 1, id: 'overview', title: 'Overview of study',
+    scope: { primaryGraphs: ['shared/domain'], contextGraphs: ['kit/core', 'upper/gufo'] },
+    selection: { entities: [], excludedEntities: [], levels: ['top', 'domain', 'task', 'application'],
+                 relationKinds: ['kit-relation', 'kit-mapping', 'class-inheritance'], relationTypeIris: [],
+                 expansion: { hops: 1, direction: 'both' } },
+    groups: [{ id: 'g-p', title: 'projects/p', members: ['urn:sample:Item'], collapsed: true }], summaries: [], annotations: [],
+    presentation: { languages: ['en', 'ru'], direction: 'RIGHT', maxNodes: 200, maxEdges: 400, preset: 'domain' },
+  };
+  routes['POST /overview'] = () => ({ body: { spec, snapshotId: 'snap-ov', mappingTargets: { 'shared/domain@0.1': 3 } } });
+  render(<App />);
+  const owner = await screen.findByLabelText('owner');
+  await waitFor(() => expect(within(owner).getByText('study')).toBeTruthy());
+  fireEvent.change(owner, { target: { value: 'study' } });
+  fireEvent.click(await screen.findByText('Overview of all levels'));
+  await screen.findByLabelText('concept Order');
+  expect(calls.find((c) => c.path === '/overview')!.body).toEqual({ owner: 'study', version: 'working', languages: ['en', 'ru'] });
+  const sent = calls.find((c) => c.path === '/compile')!.body as { spec: typeof spec; snapshotId: string };
+  expect(sent.snapshotId).toBe('snap-ov');
+  expect(sent.spec.groups).toEqual(spec.groups);
+  expect(sent.spec.title).toBe('Overview of study');
+  expect(screen.getAllByRole('status').some((s) => s.textContent?.includes('shared/domain@0.1 read for the targets of mappings'))).toBe(true);
+  expect((screen.getByLabelText('domain') as HTMLInputElement).checked).toBe(true);
+});
