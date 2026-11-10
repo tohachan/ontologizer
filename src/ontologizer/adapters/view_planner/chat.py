@@ -7,7 +7,7 @@ Config, in the hub's `visualizer.planner` (or its `ontologizer.local.yaml`):
         adapter: chat
         url: https://openrouter.ai/api/v1      # any OpenAI-compatible endpoint
         model: <provider/model>               # required: no model is assumed
-        env: OPENROUTER_API_KEY               # where the key is: the environment, else the hub's .env
+        env: OPENROUTER_API_KEY               # the environment, else the hub's .env (core/envfile.py)
         timeout: 60
 
 The key is sent only to `url` and named in no error. The model is asked for one JSON object, either
@@ -17,12 +17,12 @@ The key is sent only to `url` and named in no error. The model is asked for one 
 from __future__ import annotations
 
 import json
-import os
 import urllib.error
 import urllib.request
 from dataclasses import asdict
 from pathlib import Path
 
+from ontologizer.core.envfile import read_key
 from ontologizer.ports.view_planner import CONTRACT_VERSION, PlannerError, PlanRequest, PlanResult
 
 INSTRUCTIONS = """You plan a diagram of part of an ontology. You get a request in any language, the
@@ -37,17 +37,6 @@ another language than the request. Do not invent relationships; a summary is a p
 relationship IDs that connect in the stated directions. Hops are 0 to 3. Annotations are plain text."""
 
 
-def _read_key(env: str, files: list[Path]) -> str | None:
-    if os.environ.get(env):
-        return os.environ[env]
-    for p in files:
-        if p.is_file():
-            for line in p.read_text().splitlines():
-                if line.startswith(f"{env}="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'") or None
-    return None
-
-
 class ChatPlanner:
     def __init__(self, conf: dict, base: Path):
         if not conf.get("model"):
@@ -56,7 +45,7 @@ class ChatPlanner:
         self.model = str(conf["model"])
         self.timeout = float(conf.get("timeout", 60))
         self.env = str(conf.get("env", "OPENROUTER_API_KEY"))
-        self._key = _read_key(self.env, [Path(base) / ".env"])
+        self._key = read_key(self.env, [Path(base) / ".env"])   # a worktree falls back to the main checkout's .env
 
     def plan(self, request: PlanRequest) -> PlanResult:
         if request.contract_version != CONTRACT_VERSION:
