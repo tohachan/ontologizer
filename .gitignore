@@ -21,3 +21,4 @@ deps/open-ontologies/local.conf
 # visualizer browser bundle: dependencies and build output
 web/visualizer/node_modules/
 web/visualizer/dist/
+tmp/
