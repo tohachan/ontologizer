@@ -60,23 +60,39 @@ export function App() {
   const request = useRef(0);
   const [tab, setTab] = useState<SidebarTab>(() => recall(TAB_KEY, TABS, 'agent'));
   const chooseTab = useCallback((t: SidebarTab) => { setTab(t); remember(TAB_KEY, t); }, []);
-  const undoTo = useRef(new Map<string, ViewSpec>());        // per agent entry: the page's spec before it
+  // per agent entry: the page's owner and spec before it (null: no diagram), kept across owner switches
+  const undoTo = useRef(new Map<string, { owner: string | null; spec: ViewSpec | null }>());
+  const ownerRef = useRef<string | null>(null);
+  ownerRef.current = owner;
+  const ownerLoad = useRef(0);
 
   useEffect(() => { api.catalog().then(setCatalog, (e) => setError(describe(e))); }, []);
 
-  const chooseOwner = useCallback((o: string) => {
+  // Switching owner resets the canvas and loads the owner's catalog and saved views. The chat is not touched:
+  // its session reads every owner's graphs (docs/visualizer-agent.md §7). With `fresh`, the settings start
+  // over (the owner chosen by hand); without, the caller applies a spec of its own (the agent's).
+  const loadOwner = useCallback(async (o: string, fresh: boolean): Promise<boolean> => {
     request.current++;                                       // an answer still on its way belongs to the old view
-    setOwner(o); setOwnerCat(null); setHits([]); setCompilation(null); setPicked([]); setFocus(null); setBusy(false);
-    setExtra(ops.EMPTY);
-    snapshot.current = null; undoTo.current.clear();
+    const mine = ++ownerLoad.current;
+    ownerRef.current = o;
+    setOwner(o); setOwnerCat(null); setHits([]); setCompilation(null); setCompiledSpec(null); setPicked([]); setFocus(null);
+    setBusy(false); setExtra(ops.EMPTY);
+    snapshot.current = null;
     setOpened({ id: 'untitled', title: '', revision: null }); setInitialLayout(null); setCanvasKey((k) => k + 1);
-    api.views(o).then((v) => setViews(v.views), () => setViews([]));
-    api.ownerCatalog(o).then((c) => {
+    api.views(o).then((v) => { if (mine === ownerLoad.current) setViews(v.views); }, () => setViews([]));
+    try {
+      const c = await api.ownerCatalog(o);
+      if (mine !== ownerLoad.current) return false;
       setOwnerCat(c);
       const kit = c.graphs.filter((g) => g.owner === null && ['upper/gufo', 'kit/core'].includes(g.path)).map((g) => g.path);
-      setSel({ ...START, context: kit });
-    }, (e) => setError(describe(e)));
+      if (fresh) setSel({ ...START, context: kit });
+      return true;
+    } catch (e) {
+      if (mine === ownerLoad.current) setError(describe(e));
+      return false;
+    }
   }, []);
+  const chooseOwner = useCallback((o: string) => { void loadOwner(o, true); }, [loadOwner]);
 
   const snapshotFor = (key: string) => (snapshot.current?.key === key ? snapshot.current.id : undefined);
 
@@ -103,8 +119,9 @@ export function App() {
   }, [owner, sel]);
 
   const compileWith = useCallback(async (s: Selection, x: ops.Extra,
-      opts: { mode?: 'strict' | 'tolerant'; compareTo?: string; fresh?: boolean; id?: string; title?: string } = {}): Promise<Compilation | null> => {
-    if (!owner) return null;
+      opts: { mode?: 'strict' | 'tolerant'; compareTo?: string; fresh?: boolean; id?: string; title?: string; owner?: string } = {}): Promise<Compilation | null> => {
+    const o = opts.owner ?? ownerRef.current;                  // an owner just switched to is not in this closure yet
+    if (!o) return null;
     const spec = buildSpec(s, x, opts.id ?? opened.id, opts.title ?? (opened.title || 'Untitled view'));
     const key = scopeKey(spec.scope);
     const mine = ++request.current;
@@ -112,10 +129,10 @@ export function App() {
     try {
       let c: Compilation;
       try {
-        c = await api.compile(owner, spec, { snapshotId: opts.fresh ? undefined : snapshotFor(key), mode: opts.mode, compareTo: opts.compareTo });
+        c = await api.compile(o, spec, { snapshotId: opts.fresh ? undefined : snapshotFor(key), mode: opts.mode, compareTo: opts.compareTo });
       } catch (e) {
         if (!(e instanceof ApiFailure && e.code === 'snapshot-expired')) throw e;
-        c = await api.compile(owner, spec, { mode: opts.mode, compareTo: opts.compareTo });
+        c = await api.compile(o, spec, { mode: opts.mode, compareTo: opts.compareTo });
         setNotice('The source was read again: the earlier snapshot had expired.');
       }
       if (mine !== request.current) return null;               // a newer request owns the canvas
@@ -137,7 +154,7 @@ export function App() {
     } finally {
       if (mine === request.current) setBusy(false);
     }
-  }, [owner, opened]);
+  }, [opened]);
 
   const compile = useCallback(() => { void compileWith(sel, extra); }, [compileWith, sel, extra]);
 
@@ -197,10 +214,13 @@ export function App() {
 
   // A view operation changes the spec and shows the result at once; if that view does not compile,
   // the spec goes back to what it was and the last diagram stays.
-  const apply = useCallback(async (s: Selection, x: ops.Extra) => {
+  // With `switched`, the owner has just changed: its compile names it, and a failure leaves the settings as
+  // the spec has them, since the earlier ones belong to the other owner.
+  const apply = useCallback(async (s: Selection, x: ops.Extra, switched?: { owner: string }) => {
     const before = { s: sel, x: extra };
     setSel(s); setExtra(x);
-    if (!(await compileWith(s, x))) { setSel(before.s); setExtra(before.x); }
+    const c = await compileWith(s, x, switched ? { owner: switched.owner, id: 'untitled', title: 'Untitled view' } : {});
+    if (!c && !switched) { setSel(before.s); setExtra(before.x); }
   }, [compileWith, sel, extra]);
 
   // The overview is a spec built by the service (core/views/builders.py), compiled on the snapshot it read.
@@ -254,31 +274,56 @@ export function App() {
     }
   }, [owner, sel, extra, opened, apply]);
 
-  // A spec from the agent (docs/visualizer-agent.md §4) is applied as any view operation: the same compile,
-  // the snapshot reused while the scope is unchanged, the arrangement kept when the spec names none.
-  const applySpec = useCallback((spec: ViewSpec) => {
-    const { s, x } = keepArrangement(fromSpec(spec, sel), sel);
-    return apply(s, x);
-  }, [apply, sel]);
+  // A spec from the agent (docs/visualizer-agent.md §4, §7) is applied as any view operation: the same compile,
+  // the snapshot reused while the scope is unchanged, the arrangement kept when the spec names none. A spec
+  // over another owner's graphs switches the page to that owner first (its catalog and views, a new canvas),
+  // and leaves the chat as it is. A null spec clears the diagram (an undo back to a page that showed none).
+  const applySpec = useCallback(async (spec: ViewSpec | null, specOwner: string | null) => {
+    const target = specOwner ?? ownerRef.current;
+    const switching = !!target && target !== ownerRef.current;
+    if (switching && !(await loadOwner(target!, !spec))) return;
+    if (!spec) {
+      request.current++;
+      setCompilation(null); setCompiledSpec(null); setPicked([]); setFocus(null);
+      return;
+    }
+    if (!target) return;
+    const base = switching ? START : sel;
+    const { s, x } = keepArrangement(fromSpec(spec, base), sel);
+    return apply(s, x, switching ? { owner: target } : undefined);
+  }, [apply, sel, loadOwner]);
 
   // The open view as the agent sees it; read when a chat request goes, and moved on by each applied entry.
-  const pageSpec = useRef<ViewSpec | null>(null);
-  pageSpec.current = buildSpec(sel, extra, opened.id, opened.title || 'Untitled view');
+  // With no diagram shown, the agent gets no owner and no spec.
+  const pageView = useRef<{ owner: string | null; spec: ViewSpec | null }>({ owner: null, spec: null });
+  pageView.current = compilation && owner
+    ? { owner, spec: buildSpec(sel, extra, opened.id, opened.title || 'Untitled view') } : { owner: null, spec: null };
   const agentView = useRef<AgentView | null>(null);
-  agentView.current = { spec: pageSpec.current, compileId: compilation?.compileId ?? null, picked };
+  agentView.current = { ...pageView.current, compileId: pageView.current.spec ? compilation?.compileId ?? null : null,
+                        picked: pageView.current.spec ? picked : [] };
   const viewForAgent = useCallback(() => agentView.current!, []);
+  // The agent's views and their undos apply one after the other, each with the page as the one before left
+  // it: an owner switch waits for that owner's catalog, and a later view must not be overtaken by it.
+  const applyLatest = useRef(applySpec);
+  applyLatest.current = applySpec;
+  const agentQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const queued = useRef<{ n: number; view: { owner: string | null; spec: ViewSpec | null } | null }>({ n: 0, view: null });
+  const enqueue = (view: { owner: string | null; spec: ViewSpec | null }) => {
+    const n = ++queued.current.n;
+    queued.current.view = view;                                // what the page will show once the queue has run
+    agentQueue.current = agentQueue.current.then(() => applyLatest.current(view.spec, view.owner)).catch(() => {})
+      .finally(() => { if (queued.current.n === n) queued.current.view = null; });
+  };
   const onAgentView = useCallback((id: string, ev: ViewEvent) => {
-    if (!undoTo.current.has(id) && pageSpec.current) undoTo.current.set(id, pageSpec.current);
-    pageSpec.current = ev.spec;
-    void applySpec(ev.spec);
-  }, [applySpec]);
-  // Undo is the page's own: back to the spec before that entry, without asking the agent.
+    const before = queued.current.view ?? pageView.current;
+    if (!undoTo.current.has(id)) undoTo.current.set(id, before);
+    enqueue({ owner: ev.owner ?? before.owner ?? ownerRef.current, spec: ev.spec });
+  }, []);
+  // Undo is the page's own: back to the owner and spec before that entry, without asking the agent.
   const onAgentUndo = useCallback((id: string) => {
     const before = undoTo.current.get(id);
-    if (!before) return;
-    pageSpec.current = before;
-    void applySpec(before);
-  }, [applySpec]);
+    if (before) enqueue(before);
+  }, []);
   const unpick = useCallback((id: string) => { setPicked((ps) => ps.filter((x) => x !== id)); setFocus((f) => (f === id ? null : f)); }, []);
 
   const onAction = useCallback((a: Action) => {
@@ -321,6 +366,7 @@ export function App() {
     <div className="app">
       <header>
         <h1>Ontology visualizer</h1>
+        {owner && <span className="owner-name" aria-label="current owner" title="the owner of this view; change it in Settings">{owner}</span>}
         {counts && <span className="counts" aria-label="counts">
           {opened.title && <b>{opened.title}{opened.revision !== null ? ` (rev ${opened.revision})` : ' (not saved)'} · </b>}
           {counts.shownNodes} nodes · {counts.shownEdges} edges
@@ -363,7 +409,7 @@ export function App() {
                  filteredByLevel={sameSelection ? compilation?.diagram.counts.filteredByLevel : undefined}
                  shownFrom={shownFrom} cut={!!counts?.omittedNodes} pending={pending}
                  onOverview={(v) => void overview(v)} tab={tab} onTab={chooseTab}
-                 agent={<Agent owner={owner} view={viewForAgent} onView={onAgentView} onUndo={onAgentUndo}
+                 agent={<Agent view={viewForAgent} onView={onAgentView} onUndo={onAgentUndo}
                                picked={chips} onUnpick={unpick} onSettings={() => chooseTab('settings')} />}>
           {owner && catalog?.planner.enabled && sel.primary.length > 0 &&
             <Ask onAsk={(q) => void ask(q)} busy={busy} candidates={candidates}

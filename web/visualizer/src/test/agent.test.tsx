@@ -127,16 +127,17 @@ it('a turn streams text, reasoning, tool steps and a view the page applies; Undo
   // the request: the AI SDK's own fields, and the open view with its compile and the picked card
   const req = calls.find((c) => c.path === '/agent/sessions/s1/chat')!.body as {
     id: string; messages: { role: string; parts: { type: string; text: string }[] }[]; trigger: string;
-    view: { spec: ViewSpec; compileId: string; picked: string[] } };
-  expect(Object.keys(req).sort()).toEqual(['id', 'messages', 'trigger', 'view']);   // messageId only on a regenerate
+    view: { owner: string; spec: ViewSpec; compileId: string; picked: string[] }; agent: unknown };
+  expect(Object.keys(req).sort()).toEqual(['agent', 'id', 'messages', 'trigger', 'view']);   // messageId only on a regenerate
   expect(req.id).toBe('s1');
   expect(req.trigger).toBe('submit-message');
   expect(req.messages.at(-1)!.parts[0]).toEqual({ type: 'text', text: 'only the item, this one aside' });
+  expect(req.view.owner).toBe('study');
   expect(req.view.compileId).toBe('c1');
   expect(req.view.picked).toEqual(['entity:order']);
   expect(req.view.spec.scope).toEqual(before.scope);
   expect(req.view.spec.selection).toEqual(before.selection);
-  expect(calls.find((c) => c.method === 'POST' && c.path === '/agent/sessions')!.body).toEqual({ owner: 'study', harness: 'claude' });
+  expect(calls.find((c) => c.method === 'POST' && c.path === '/agent/sessions')!.body).toEqual({ harness: 'claude' });
 
   // the page compiled the agent's spec, on the snapshot it already had for this scope
   await waitFor(() => expect(compiles().length).toBe(2));
@@ -264,7 +265,7 @@ it('the tab and the harness are remembered; a switch ends the session and starts
   fireEvent.change(within(agentPanel()).getByLabelText('harness'), { target: { value: 'codex' } });
   await waitFor(() => expect(calls.some((c) => c.method === 'DELETE' && c.path === '/agent/sessions/s1')).toBe(true));
   await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.path === '/agent/sessions').at(-1)!.body)
-    .toEqual({ owner: 'study', harness: 'codex' }));
+    .toEqual({ harness: 'codex' }));
   fireEvent.click(tab('Settings'));
   expect(localStorage.getItem(TAB_KEY)).toBe('settings');
   expect(localStorage.getItem(HARNESS_KEY)).toBe('codex');
@@ -302,4 +303,158 @@ it('summarises tool arguments and renders minimal markdown', () => {
   expect(container.querySelectorAll('li').length).toBe(2);
   expect(container.querySelector('code')!.textContent).toBe('a');
   expect(container.querySelector('pre')!.textContent).toBe('code');
+});
+
+// ---- ONTO-47: the model on the page; ONTO-49: the agent is not bound to an owner ------------------------
+const withModels = { harnesses: [
+  { name: 'claude', installed: true, signedIn: true, version: '2.1.0',
+    models: [{ id: 'default', label: 'Default' }, { id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }, { id: 'haiku', label: 'Haiku' }],
+    defaultModel: 'sonnet', efforts: ['low', 'medium', 'high'], defaultEffort: null },
+  { name: 'codex', installed: true, signedIn: true, version: '0.166.0',
+    models: [{ id: 'default', label: 'Default' }, { id: 'gpt-5.1', label: 'GPT-5.1' }], defaultModel: 'default', efforts: [], defaultEffort: null }] };
+type ChatBody = { view: { owner: string | null; spec: ViewSpec | null; compileId: string | null; picked: string[] };
+                  agent: { model: string | null; effort: string | null } };
+const chatBodies = () => calls.filter((c) => c.path.endsWith('/chat')).map((c) => c.body as ChatBody);
+const say = async (text: string) => {
+  const panel = agentPanel();
+  fireEvent.change(await within(panel).findByLabelText('message'), { target: { value: text } });
+  fireEvent.click(within(panel).getByText('Send'));
+};
+const answer = (text: string, meta?: object) => [
+  { type: 'start', messageId: `a-${text}` }, { type: 'start-step' },
+  ...(meta ? [{ type: 'message-metadata', messageMetadata: meta }] : []),
+  { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: text }, { type: 'text-end', id: 't' },
+  { type: 'finish-step' }, { type: 'finish', finishReason: 'stop' }];
+
+it('a fresh page chats with no owner: the Agent tab has no owner choice, and the request has no view', async () => {
+  routes['POST /agent/sessions/s1/chat'] = () => sse(answer('Which owner?', { harness: 'claude', model: 'claude-sonnet-4-5' }));
+  render(<App />);
+  const panel = agentPanel();
+  await within(panel).findByLabelText('message');
+  expect(within(panel).queryByLabelText('owner')).toBeNull();
+  expect(within(document.getElementById('panel-settings')!).getByLabelText('owner')).toBeTruthy();
+  expect(screen.queryByLabelText('current owner')).toBeNull();
+  expect(calls.find((c) => c.method === 'POST' && c.path === '/agent/sessions')!.body).toEqual({ harness: 'claude' });
+  await say('what is there?');
+  await within(panel).findByText('Which owner?');
+  expect(chatBodies()[0].view).toEqual({ owner: null, spec: null, compileId: null, picked: [] });
+  expect(chatBodies()[0].agent).toEqual({ model: 'default', effort: null });
+
+  // choosing an owner (in Settings) keeps the session and the chat
+  fireEvent.change(screen.getByLabelText('owner'), { target: { value: 'study' } });
+  await waitFor(() => expect(screen.getByLabelText('current owner').textContent).toBe('study'));
+  expect(calls.filter((c) => c.path === '/agent/sessions').length).toBe(1);
+  expect(calls.some((c) => c.method === 'DELETE' && c.path.startsWith('/agent/sessions/'))).toBe(false);
+  expect(within(panel).getByText('Which owner?')).toBeTruthy();
+});
+
+it('the model and effort are chosen per harness, sent with each request, remembered; the answer names its model', async () => {
+  routes['GET /agent/harnesses'] = () => ({ body: withModels });
+  routes['POST /agent/sessions'] = (b) => ({ body: { sessionId: (b as { harness: string }).harness === 'codex' ? 's2' : 's1' } });
+  routes['DELETE /agent/sessions/s2'] = () => ({ body: {} });
+  let n = 0;
+  routes['POST /agent/sessions/s1/chat'] = () => sse(++n === 1 ? answer('First.', { harness: 'claude', model: 'claude-haiku-4-5-20251001' })
+                                                              : answer('Second.'));
+  routes['POST /agent/sessions/s2/chat'] = () => sse(answer('From Codex.', { harness: 'codex', model: 'gpt-5.1' }));
+  const first = render(<App />);
+  const panel = agentPanel();
+  const model = await within(panel).findByLabelText('model') as HTMLSelectElement;
+  expect(model.value).toBe('sonnet');                                   // the service's default
+  expect([...model.options].map((o) => o.text)).toEqual(['Default', 'Opus', 'Sonnet', 'Haiku']);
+  expect((within(panel).getByLabelText('effort') as HTMLSelectElement).value).toBe('default');
+  fireEvent.change(model, { target: { value: 'haiku' } });
+  fireEvent.change(within(panel).getByLabelText('effort'), { target: { value: 'low' } });
+  await say('hello');
+  await within(panel).findByText('First.');
+  expect(chatBodies()[0].agent).toEqual({ model: 'haiku', effort: 'low' });
+  expect(within(panel).getAllByLabelText('answered by').map((x) => x.textContent)).toEqual(['claude-haiku-4-5-20251001']);
+  await say('again');
+  await within(panel).findByText('Second.');
+  expect(within(panel).getAllByLabelText('answered by').map((x) => x.textContent))
+    .toEqual(['claude-haiku-4-5-20251001', 'default model']);         // no metadata: the fallback
+  expect(localStorage.getItem('visualizer.agent.claude.model')).toBe('haiku');
+  expect(localStorage.getItem('visualizer.agent.claude.effort')).toBe('low');
+
+  // Codex: its own models, no effort
+  fireEvent.change(within(panel).getByLabelText('harness'), { target: { value: 'codex' } });
+  await waitFor(() => expect((within(panel).getByLabelText('model') as HTMLSelectElement).value).toBe('default'));
+  expect(within(panel).queryByLabelText('effort')).toBeNull();
+  fireEvent.change(within(panel).getByLabelText('model'), { target: { value: 'gpt-5.1' } });
+  await say('codex, hello');
+  await within(panel).findByText('From Codex.');
+  expect(chatBodies().at(-1)!.agent).toEqual({ model: 'gpt-5.1', effort: null });
+  first.unmount();
+
+  // remembered per harness
+  render(<App />);
+  const again = agentPanel();
+  await waitFor(() => expect((within(again).getByLabelText('model') as HTMLSelectElement).value).toBe('gpt-5.1'));
+  fireEvent.change(within(again).getByLabelText('harness'), { target: { value: 'claude' } });
+  await waitFor(() => expect((within(again).getByLabelText('model') as HTMLSelectElement).value).toBe('haiku'));
+  expect((within(again).getByLabelText('effort') as HTMLSelectElement).value).toBe('low');
+});
+
+it('a remembered model the service no longer lists falls back to its default, and refusing storage is harmless', async () => {
+  routes['GET /agent/harnesses'] = () => ({ body: withModels });
+  localStorage.setItem('visualizer.agent.claude.model', 'gone-model');
+  render(<App />);
+  expect((await within(agentPanel()).findByLabelText('model') as HTMLSelectElement).value).toBe('sonnet');
+  const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('denied'); });
+  fireEvent.change(within(agentPanel()).getByLabelText('model'), { target: { value: 'opus' } });
+  expect((within(agentPanel()).getByLabelText('model') as HTMLSelectElement).value).toBe('opus');
+  set.mockRestore();
+});
+
+// The agent applies a view over another owner's graphs: the page switches owner, keeps the chat, compiles it.
+const otherCatalog = { ...ownerCatalog, owner: 'other', project: 'other', graphs: [
+  { path: 'other/domain', iri: 'urn:ontologizer:graph:other/domain', role: 'domain', level: 'domain', owner: 'other', base: 'other/domain', release: null, own: true },
+  ownerCatalog.graphs[1]] };
+const otherSpec = (): ViewSpec => ({ ...agentSpec(), title: 'Other view',
+  scope: { primaryGraphs: ['other/domain'], contextGraphs: ['upper/gufo'] },
+  selection: { ...agentSpec().selection, entities: ['urn:other:Thing'] } });
+
+it('a data-view of another owner switches the page to it, keeps the chat; Undo goes back to the owner and spec before', async () => {
+  routes['GET /catalog'] = () => ({ body: { ...catalog, owners: [...catalog.owners, { name: 'other', available: true }] } });
+  routes['GET /catalog?owner=other'] = () => ({ body: otherCatalog });
+  routes['POST /agent/sessions/s1/chat'] = () => sse([{ type: 'start', messageId: 'a1' }, { type: 'start-step' },
+    { type: 'tool-input-available', toolCallId: 'c1', toolName: 'apply_view', input: { owner: 'other', spec: otherSpec(), summary: 'Thing' } },
+    { type: 'tool-output-available', toolCallId: 'c1', output: { ok: true } },
+    { type: 'data-view', id: 'v1', data: { spec: otherSpec(), summary: 'Thing, of the other owner', undoOf: null, owner: 'other' } },
+    { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'Switched.' }, { type: 'text-end', id: 't' },
+    { type: 'finish-step' }, { type: 'finish', finishReason: 'stop' }]);
+  await toDiagram();
+  const before = compiles()[0].spec;
+  expect(screen.getByLabelText('current owner').textContent).toBe('study');
+  await say('show me Thing of the other owner');
+  const panel = agentPanel();
+  await within(panel).findByText('Switched.');
+  await waitFor(() => expect(calls.filter((c) => c.path === '/compile').length).toBe(2));
+  const compiled = calls.filter((c) => c.path === '/compile').map((c) => c.body as { owner: string; spec: ViewSpec; snapshotId?: string });
+  expect(compiled[1].owner).toBe('other');
+  expect(compiled[1].spec.scope).toEqual(otherSpec().scope);
+  expect(compiled[1].spec.selection).toEqual(otherSpec().selection);
+  expect(compiled[1].snapshotId).toBeUndefined();                       // another owner: a fresh read
+  expect(calls.some((c) => c.path === '/catalog?owner=other')).toBe(true);
+  await waitFor(() => expect(screen.getByLabelText('current owner').textContent).toBe('other'));
+  expect((screen.getByLabelText('owner') as HTMLSelectElement).value).toBe('other');
+  // the chat and its session are untouched
+  expect(calls.filter((c) => c.path === '/agent/sessions').length).toBe(1);
+  expect(calls.some((c) => c.method === 'DELETE' && c.path === '/agent/sessions/s1')).toBe(false);
+  expect(within(panel).getByText('show me Thing of the other owner')).toBeTruthy();
+  await screen.findByLabelText('concept Order');                       // the compile's diagram is drawn
+  // the next request names the new owner
+  routes['POST /agent/sessions/s1/chat'] = () => sse(answer('Ok.'));
+  await say('thanks');
+  await within(panel).findByText('Ok.');
+  expect(chatBodies().at(-1)!.view.owner).toBe('other');
+
+  // Undo: back to study and its spec
+  fireEvent.click(within(within(panel).getByLabelText('view entry')).getByText('Undo'));
+  await waitFor(() => expect(calls.filter((c) => c.path === '/compile').length).toBe(3));
+  const undone = calls.filter((c) => c.path === '/compile').at(-1)!.body as { owner: string; spec: ViewSpec };
+  expect(undone.owner).toBe('study');
+  expect(undone.spec.scope).toEqual(before.scope);
+  expect(undone.spec.selection).toEqual(before.selection);
+  await waitFor(() => expect(screen.getByLabelText('current owner').textContent).toBe('study'));
+  expect(calls.filter((c) => c.path === '/agent/sessions').length).toBe(1);
 });

@@ -3,12 +3,13 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { agentApi } from './api';
-import type { AgentView, ChatMessage, ViewEvent } from './agentTypes';
+import type { AgentChoice, AgentView, ChatMessage, ViewEvent } from './agentTypes';
 
 export type Chip = { id: string; label: string };
 type Props = {
   sessionId: string;
   view: () => AgentView;                                  // the open view, read when a request is sent
+  agent: () => AgentChoice;                               // the model and effort chosen, read the same way
   onView: (id: string, ev: ViewEvent) => void;            // a `data-view` chunk arrived
   onUndo: (id: string) => void;                           // back to the page's view before that entry
   picked: Chip[]; onUnpick: (id: string) => void;
@@ -19,7 +20,7 @@ export function Chat(p: Props) {
   latest.current = p;
   const transport = useMemo(() => new DefaultChatTransport<ChatMessage>({
     api: agentApi.chatUrl(p.sessionId),
-    body: () => ({ view: latest.current.view() }),
+    body: () => ({ view: latest.current.view(), agent: latest.current.agent() }),
   }), [p.sessionId]);
   const { messages, sendMessage, status, error, stop, clearError } = useChat<ChatMessage>({
     id: p.sessionId, transport,
@@ -51,6 +52,10 @@ export function Chat(p: Props) {
             {m.parts.map((part, i) => <Fragment key={i}>{renderPart(part, running, undone, (id) => {
               setUndone((u) => [...u, id]); p.onUndo(id);
             })}</Fragment>)}
+            {m.role === 'assistant' && (
+              <p className="answered-by" aria-label="answered by" title={m.metadata?.harness ? `answered by ${m.metadata.harness}` : undefined}>
+                {m.metadata?.model || 'default model'}</p>
+            )}
           </div>
         ))}
         {status === 'submitted' && <p className="muted small">…</p>}

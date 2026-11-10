@@ -82,12 +82,6 @@ export function Sidebar(p: Props) {
   const tab = p.tab ?? 'agent';
   return (
     <nav className="sidebar" aria-label="sidebar">
-      <label>Owner{' '}
-        <select value={p.owner ?? ''} onChange={(e) => p.onOwner(e.target.value)} aria-label="owner">
-          <option value="" disabled>choose…</option>
-          {p.owners.map((o) => <option key={o.name} value={o.name} disabled={!o.available}>{o.name}{o.available ? '' : ' (not available)'}</option>)}
-        </select>
-      </label>
       {p.agent !== undefined && (
         <div role="tablist" className="tabs" aria-label="sidebar tabs">
           {TABS.map((t) => (
@@ -104,6 +98,13 @@ export function Sidebar(p: Props) {
       )}
       <div role="tabpanel" id="panel-settings" aria-labelledby="tab-settings" aria-label="view settings" className="panel"
            hidden={p.agent !== undefined && tab !== 'settings'}>
+      {/* the owner is a setting of the views built here; the agent reads every owner's graphs (§7) */}
+      <label>Owner{' '}
+        <select value={p.owner ?? ''} onChange={(e) => p.onOwner(e.target.value)} aria-label="owner">
+          <option value="" disabled>choose…</option>
+          {p.owners.map((o) => <option key={o.name} value={o.name} disabled={!o.available}>{o.name}{o.available ? '' : ' (not available)'}</option>)}
+        </select>
+      </label>
       {p.children}
       {p.owner && (
         <>
