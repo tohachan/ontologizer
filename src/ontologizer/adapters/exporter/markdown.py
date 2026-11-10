@@ -29,6 +29,7 @@ from rdflib import RDF, RDFS, SKOS, Dataset, Graph, Namespace, URIRef
 from ontologizer.core.config import GUFO, KIT, Config
 from ontologizer.core.levels import Preset
 from ontologizer.core.route import canonical_hash
+from ontologizer.core.views.reader import read_evidence
 
 OK = Namespace(KIT)
 VERSION = "0.1.0"
@@ -85,14 +86,10 @@ class MarkdownExporter:
 
     def _evidence(self, g: Graph, node) -> str:
         out = []
-        for ev in sorted(g.objects(node, OK.evidence)):
-            path = g.value(ev, OK.sourcePath)
-            lines = g.value(ev, OK.sourceLines)
-            repo = g.value(ev, OK.sourceRepo)
-            commit = g.value(ev, OK.sourceCommit)
-            ref = f"{repo + ':' if repo else ''}{path}{':' + str(lines) if lines else ''}"
-            if commit:
-                ref += f"@{str(commit)[:8]}"
+        for ev in read_evidence(g, node):
+            ref = f"{ev.repo + ':' if ev.repo else ''}{ev.path}{':' + ev.lines if ev.lines else ''}"
+            if ev.commit:
+                ref += f"@{ev.commit[:8]}"
             out.append(f"`{ref}`")
         return "<br>".join(out)
 
