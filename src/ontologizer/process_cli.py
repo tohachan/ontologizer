@@ -231,7 +231,7 @@ def cmd_map(args) -> int:
 # ---- stage 5 ---------------------------------------------------------------------
 @_errors
 def cmd_group(args) -> int:
-    from ontologizer.core.grouping import build
+    from ontologizer.core.grouping import build, summary
     run = _run(args)
     why = _not_overlay(run, "stage 5 (group)")
     if why:
@@ -239,9 +239,8 @@ def cmd_group(args) -> int:
         return 2
     fr = _frame(run.cfg)
     d = build(run, fr)
-    elig = sum(1 for g in d["groups"] if g["eligible"])
     print(f"group: {d['unmapped']} unmapped concepts, {d['pairs_judged']} pairs judged (mode {d['mode']}), "
-          f"{len(d['groups'])} groups, {elig} with ≥2 families → {run.path('consolidate', 'groups.json')}. "
+          f"{summary(d)} → {run.path('consolidate', 'groups.json')}. "
           f"Decisions go to consolidation/{run.id}.yaml (skill analyse-corpus, stage 5).")
     return 0
 
@@ -256,15 +255,24 @@ def cmd_verify(args) -> int:
         print(why, file=sys.stderr)
         return 2
     if args.apply:
+        if args.changed or args.since:
+            print("--changed and --since belong to the verification, not to --apply", file=sys.stderr)
+            return 2
         st = verify.apply(run, args.project, keep_failed=args.keep_failed)
-        print(f"{args.project}: {len(st['removed_claims'])} claims removed, {st['dropped_evidence']} evidence items "
-              f"dropped, {st['rechecks_changed']} judgements changed by the recheck ({st['recheck']})")
+        print(f"{args.project}: {len(st['removed_claims'])} claims removed ({st['removed_with_an_end']} with a removed "
+              f"end), {st['dropped_evidence']} evidence items dropped, {len(st['unverified'])} negative judgements "
+              f"kept unverified (no recheck confirmed them; {len(st['kept_unverified'])} claims rest on them only), "
+              f"{st['rechecks_changed']} judgements changed by the recheck ({st['recheck']}). Removed claims, with "
+              f"their reasons and original form: `applied.removed_claims` in "
+              f"{run.path('verify', args.project + '.json')}")
         return 0
-    d = verify.analyse(run, args.project)
+    d = verify.analyse(run, args.project, changed=args.changed, since=args.since)
     e = d["evidence"]
-    print(f"{args.project}: {e['checked']} evidence items checked (mode {d['mode']}): {e['supported']} supported, "
+    kept = f"; {d['kept']['evidence']} judgements kept from run {d['kept']['from']}" if d.get("kept") else ""
+    print(f"{args.project}: {e['checked']} evidence items checked (mode {d['mode']}{kept}): {e['supported']} supported, "
           f"{e['unsupported']} unsupported, {e['missing']} missing, {e['unchecked']} unchecked; share {e['share']}; "
-          f"{len(d['absences'])} absence claims; {d['rechecks']} items to recheck in "
+          f"{len(d['absences'])} absence claims; {d['rechecks']} items to recheck ({d['carried_rechecks']} carried "
+          f"from an earlier answer, {d['to_answer']} to answer) in "
           f"{run.path('verify', args.project + '.recheck.json')}")
     rc = verify.rechecker(run)
     if d["rechecks"] and rc:
@@ -357,7 +365,9 @@ def cmd_update_check(args) -> int:
         print(str(e), file=sys.stderr)
         return 2
     print(f"update-check @{args.base}: {d['kept']} kept, {len(d['changed'])} changed, {len(d['moved'])} moved, "
-          f"{len(d['added'])} added, {len(d['removed'])} removed; {len(d['blocking'])} blocking → "
+          f"{len(d['added'])} added, {len(d['removed'])} removed; {len(d['blocking'])} blocking, "
+          f"{len(d['warnings'])} warning(s), {len(d['questions_downgraded'])} question(s) downgraded with a reason, "
+          f"{len(d.get('questions_retired', []))} retired by the frame → "
           f"{run.path('update-check.md')}")
     for x in d["blocking"]:
         print(f"- {x}")
@@ -403,8 +413,19 @@ def cmd_review(args) -> int:
     if args.action == "build":
         d = review.build(run, _frame(run.cfg), since=args.since)
         print(f"review: {d['items']} shared concepts, {d['relations']} relations in {d['path']}; {d['open']} need a "
-              f"verdict ({d['kept']} kept, {d['carried']} carried from {args.since or 'no earlier run'}); "
-              f"a strong agent gives them")
+              f"verdict ({d['kept']} kept, {d['carried']} carried from {args.since or 'no earlier run'}"
+              + (f", {d['reopened']} reopened" if d.get("reopened") else "") + "); a strong agent gives them")
+        if d.get("support_changed"):
+            print(f"review: {len(d['support_changed'])} verdict(s) kept although their support changed; look at "
+                  f"each and delete `support_changed` once it is checked:")
+            for x in d["support_changed"]:
+                print(f"  {x['ref']}: " + "; ".join(
+                    f"{k} {', '.join(x[k])}" for k in ("added", "removed") if x[k]))
+        if d.get("counterpart_changed"):
+            print(f"review: {len(d['counterpart_changed'])} relation verdict(s) kept although a project counterpart "
+                  f"appeared or went; look at each and delete `counterpart_changed` once it is checked:")
+            for x in d["counterpart_changed"]:
+                print(f"  {x['ref']}: counterpart {x['from']} -> {x['to']}")
         return 0
     if not args.by:
         print("review apply needs --by NAME (the reviewing agent's model, e.g. claude-opus-5-5, or a person)",
@@ -412,8 +433,20 @@ def cmd_review(args) -> int:
         return 2
     d = review.apply(run, args.by, effort=args.effort)
     print(f"review: {d['accept']} accepted ({d['accept'] - d.get('accepted_unconfirmed', 0)} asserted, {d.get('accepted_unconfirmed', 0)} unconfirmed stay hypotheses), {d['reject']} rejected, {d['revise']} to revise; "
-          f"{d['mappings_removed']} project mappings removed, {d['relations_rejected']} relations rejected, "
-          f"{d['carried']} verdicts carried; gate recorded")
+          f"{d.get('disputed', 0)} disputed, {d['mappings_removed']} project mappings removed, {d['relations_rejected']} relations rejected, "
+          f"{d['carried']} verdicts carried"
+          + (f", {d['support_changed']} kept although their support changed" if d.get("support_changed") else "")
+          + (f", {d['counterpart_changed']} relation verdicts kept although their counterpart changed"
+             if d.get("counterpart_changed") else "")
+          + "; gate recorded")
+    if d.get("one_sided"):
+        print(f"not marked disputed, only one project concept stands behind them: {', '.join(d['one_sided'])}")
+    from ontologizer.core.update_check import changed_since_check
+    stale = changed_since_check(run.cfg) if (run.cfg.data.get("process") or {}).get("update_check") else []
+    if stale:
+        print(f"review apply changed {', '.join(stale)} after the update check, so `release` no longer accepts that "
+              f"check: run `ontologizer report`, then `ontologizer update-check` again before `release` "
+              f"(docs/process.md §10)")
     return 0
 
 
@@ -454,6 +487,9 @@ def register(sub) -> None:
     add("group", cmd_group)
     s = add("verify", cmd_verify); s.add_argument("project"); s.add_argument("--apply", action="store_true")
     s.add_argument("--keep-failed", action="store_true", help="keep claims left without supporting evidence")
+    s.add_argument("--changed", action="store_true",
+                   help="judge only the claims new or changed since the last verify of this run; keep the rest")
+    s.add_argument("--since", help="like --changed, keeping the judgements of another run's verify")
     add("stability", cmd_stability)
     s = add("report", cmd_report); s.add_argument("--compare", nargs=2, metavar=("A", "B"))
     s = add("release-compare", cmd_release_compare); s.add_argument("a", help="earlier version, e.g. 0.1")

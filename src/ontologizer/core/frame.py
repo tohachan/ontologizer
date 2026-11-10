@@ -144,6 +144,11 @@ def check(text: str, preset_names: list[str] | None = None, project: str | None 
             errs.append(f"competency_questions[{i}].level: one of {CQ_LEVELS}")
         if q.get("target") is not None and q["target"] not in tids:
             errs.append(f"competency_questions[{i}].target: {q['target']!r} is not a target of the frame")
+    for i, r in enumerate(h.get("retired_questions") or []):
+        if not SLUG.match(str(r.get("id", ""))) or not str(r.get("reason") or "").strip():
+            errs.append(f"retired_questions[{i}]: id (slug) and reason required")
+        elif r["id"] in ids:
+            errs.append(f"retired_questions[{i}]: {r['id']} is still a competency question")
     for t in tids - {q.get("target") for q in cqs}:
         errs.append(f"targets.{t}: no competency question carries `target: {t}`")
     if "out_of_scope" not in h:
@@ -201,6 +206,11 @@ class Frame:
     @property
     def questions(self) -> list[dict]:
         return list(self.h.get("competency_questions") or [])
+
+    @property
+    def retired_questions(self) -> dict[str, str]:
+        """Questions an earlier frame had and this one dropped on purpose: id → the owner's reason."""
+        return {r["id"]: r["reason"] for r in self.h.get("retired_questions") or [] if r.get("id")}
 
     @property
     def dimensions(self) -> list[dict]:

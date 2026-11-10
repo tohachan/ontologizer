@@ -96,6 +96,28 @@ def build(run: Run, frame: Frame) -> dict:
     return doc
 
 
+def summary(doc: dict) -> str:
+    """The groups by family support, in the frame's own numbers: admission (may enter) and confirmation
+    (independent families stand behind it). With one family in the frame no group can be confirmed."""
+    need, conf = doc["admission_families"], doc["confirmation_families"]
+    n_fam = len(doc.get("families") or {})
+    groups = doc["groups"]
+    admitted = sum(1 for g in groups if len(g["families"]) >= need)
+    confirmed = sum(1 for g in groups if len(g["families"]) >= conf)
+
+    def fams(n):
+        return f"≥{n} famil{'y' if n == 1 else 'ies'}"
+
+    parts = [f"{len(groups)} groups", f"{admitted} admissible ({fams(need)})"]
+    if conf != need:
+        parts.append(f"{confirmed} confirmed ({fams(conf)})")
+    text = ", ".join(parts)
+    if n_fam < conf:
+        text += (f"; the frame has {n_fam} famil{'y' if n_fam == 1 else 'ies'}, so no group is confirmed by "
+                 f"independent families and every admitted concept stays unconfirmed")
+    return text
+
+
 def _brief(c: dict) -> dict:
     return {"label": c["label"], "alt_labels": c.get("alt_labels", []), "definition": c["definition"],
             "category": c.get("upper_category"), "project": c.get("project")}

@@ -79,8 +79,25 @@ def _check_cq(manual: dict, frame: Frame, path) -> None:
             errs.append(f"{k}: not a question of the frame ({sorted(ids)}); ids are top-level keys")
         elif v.get("status") not in CQ_STATUSES:
             errs.append(f"{k}.status: one of {CQ_STATUSES}")
+        elif "downgrade" in v:
+            errs += [f"{k}.downgrade: {e}" for e in _downgrade_errors(v["downgrade"], v["status"])]
     if errs:
         raise FrameError([f"{path}: {e}" for e in errs])
+
+
+def _downgrade_errors(d, status: str) -> list[str]:
+    """`downgrade: {from: <earlier status>, reason: <why the earlier status no longer holds>}`: a hand-written
+    status lowered on purpose (update-check reports it instead of blocking, docs/process.md §10)."""
+    if not isinstance(d, dict):
+        return ["a mapping {from: <earlier status>, reason: <text>}"]
+    errs = []
+    if d.get("from") not in CQ_STATUSES:
+        errs.append(f"from: one of {CQ_STATUSES}")
+    elif CQ_STATUSES.index(d["from"]) >= CQ_STATUSES.index(status):
+        errs.append(f"from: {d['from']} is not above the status {status}; a downgrade lowers it")
+    if not isinstance(d.get("reason"), str) or not d["reason"].strip():
+        errs.append("reason: say why the earlier status no longer holds")
+    return errs
 
 
 def _cq_status(run: Run, frame: Frame, engine=None) -> list[dict]:
@@ -106,6 +123,8 @@ def _cq_status(run: Run, frame: Frame, engine=None) -> list[dict]:
             m = manual.get(q["id"]) or {}
             st.update(status=m.get("status", "unassessed"), how=st.get("how", "manual" if m else "none"),
                       by=m.get("by", []), note=m.get("note"))
+            if m.get("downgrade"):
+                st["downgrade"] = {"from": m["downgrade"]["from"], "reason": m["downgrade"]["reason"].strip()}
         if q.get("target"):
             st["target"] = q["target"]
             st["projects"] = (manual.get(q["id"]) or {}).get("projects") or {}
@@ -197,6 +216,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
     policies: dict[str, int] = {}
     recheck_types: dict[str, dict] = {}
     ev_checked = ev_sup = ev_final = 0
+    unverified_total = removed_total = 0
     ev_kinds: dict[str, list[int]] = {}
     cov_num = cov_den = 0
     unmeasured = []
@@ -242,6 +262,12 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
             row["verification"] = v["evidence"]
             row["absences"] = len(v.get("absences", []))
             row["recheck"] = (v.get("applied") or {}).get("recheck")
+            if v.get("applied"):
+                ap = v["applied"]
+                row["unverified"] = len(ap.get("unverified") or [])
+                row["removed_claims"] = len(ap.get("removed_claims") or [])
+                unverified_total += row["unverified"]
+                removed_total += row["removed_claims"]
             if v["evidence"]["share"] is not None:
                 ev_checked += v["evidence"]["checked"]
                 ev_sup += v["evidence"]["supported"]
@@ -285,6 +311,8 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
         "verified_evidence_by_source_kind": {k: round(a / b, 3) for k, (a, b) in sorted(ev_kinds.items()) if b} or None,
         "recheck_change_rate": {t: round(x["changed"] / x["rechecked"], 3) for t, x in sorted(recheck_types.items())
                                 if x["rechecked"]} or None,
+        "unverified_negatives": unverified_total,
+        "removed_in_verification": removed_total,
         "loo_stability": st["stable_share"],
         "cq_coverage": round(answered / len(cqs), 3) if cqs else None,
     }
@@ -293,6 +321,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
     doc = {"run": run.id, "at": now(), "study": frame.h.get("study"), "projects": projects,
            "descriptions": [p for p in projects if frame.source_kind(p) == "description"],
            "metrics": metrics, "per_project": per, "stability_marks": st["marks"], "shared": shared,
+           "disputed": sorted(s["ref"] for s in shared_concepts(run.cfg) if s.get("status") == "disputed"),
            "competency_questions": cqs, "targets": target_fit(frame, cqs, projects),
            "consistency": cons,
            "decisions": _decision_stats(run),
@@ -331,6 +360,10 @@ def render(doc: dict) -> str:
              *([f"| Verified evidence, after the recheck, by kind of source | "
                 f"{', '.join(f'{k} {v:.3f}' for k, v in m['verified_evidence_by_source_kind'].items())} |"]
                if len(m.get("verified_evidence_by_source_kind") or {}) > 1 else []),
+             f"| Negative evidence judgements kept unverified (no recheck or owner confirmed them) | "
+             f"{_fmt(m.get('unverified_negatives'))} |",
+             f"| Claims removed in verification (`applied.removed_claims`, with reasons) | "
+             f"{_fmt(m.get('removed_in_verification'))} |",
              f"| Leave-one-out stability | {_fmt(m['loo_stability'])} |",
              f"| Competency-question coverage | {_fmt(m['cq_coverage'])} |",
              f"| Consistency clashes (engine reasoning) | {_fmt(m.get('consistency_clashes'))} |", ""]
@@ -340,6 +373,9 @@ def render(doc: dict) -> str:
     if (doc.get("stability_marks") or {}).get("unconfirmed"):
         lines += [f"{doc['stability_marks']['unconfirmed']} shared concepts are unconfirmed: admitted without the "
                   "independent support that confirmation needs, so they stay hypotheses.", ""]
+    if doc.get("disputed"):
+        lines += [f"{len(doc['disputed'])} shared concepts are disputed: {', '.join(doc['disputed'])}. "
+                  "Their readings differ, and each is kept; the notes say how.", ""]
     if m["inventory_unmeasured"]:
         lines += [f"Coverage unmeasured for: {', '.join(m['inventory_unmeasured'])}.", ""]
     c = doc.get("consistency")
@@ -365,7 +401,9 @@ def render(doc: dict) -> str:
                      f"{', '.join(s['projects'])} |")
     lines += ["", "## Competency questions", "", "| Id | Level | Status | Question |", "| --- | --- | --- | --- |"]
     for q in doc["competency_questions"]:
-        lines.append(f"| {q['id']} | {q['level']} | {q['status']} | {q['question']} |")
+        dg = q.get("downgrade")
+        status = f"{q['status']} (was {dg['from']}: {dg['reason']})" if dg else q["status"]
+        lines.append(f"| {q['id']} | {q['level']} | {status} | {q['question']} |")
     for tid, t in (doc.get("targets") or {}).items():
         ps = doc["projects"]
         lines += ["", f"## Target: {t['label']}", "", "| Requirement | " + " | ".join(ps) + " | Parts to reuse |",

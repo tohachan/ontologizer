@@ -33,7 +33,8 @@ runs/<run>/
   map/<project>.json                       stage 4: candidates, category second opinion
   map/<project>.answers.json               stage 4: the LLM's mapping decisions
   consolidate/groups.json                  stage 5: meaning groups and their family support
-  verify/<project>.json                    stage 6: per-claim verdicts, rechecks, absence protocols
+  verify/<project>.json                    stage 6: per-claim verdicts, rechecks, absence protocols, removed claims
+  verify/<project>.owner.json              stage 6: the owner's own evidence verdicts, when any
   stability.json                           stage 7
   report.json, report.md                   stage 7
   review.yaml                              stage 8: the reviewing agent's verdict per shared concept
@@ -116,19 +117,37 @@ Concepts without a mapping are grouped by meaning. Code proposes candidate pairs
 
 A shared concept needs support from **at least two architectural families** of the frame. Two projects from one family count once.
 
-Two things are kept apart: *admission* (may a concept enter the shared levels) and *confirmation* (do independent families stand behind it, the preset's `domain_confirmation_min_projects`). By default they are the same number. A frame can lower admission (`admission_families: 1`) when there may be only one source. Then a concept without confirmation is marked `unconfirmed` in stage 7, and an `accept` in stage 8 leaves it a `hypothesis`. Every concept of the source is then a candidate, including those in `singletons`, and the Opus agent still decides which to take and why. Families count origins: a retelling of a source belongs to the source's family.
+Two things are kept apart: *admission* (may a concept enter the shared levels) and *confirmation* (do independent families stand behind it, the preset's `domain_confirmation_min_projects`). By default they are the same number. A frame can lower admission (`admission_families: 1`) when there may be only one source. Then a concept without confirmation is marked `unconfirmed` in stage 7, and an `accept` in stage 8 leaves it a `hypothesis`. `ontologizer group` counts the groups in these terms: admissible (at least `admission_families`) and, when it differs, confirmed (at least the confirmation number); when the frame has fewer families than confirmation needs, it says that no group can be confirmed. Every concept of the source is then a candidate, including those in `singletons`, and the Opus agent still decides which to take and why. Families count origins: a retelling of a source belongs to the source's family.
 
 A decision file adds to the decisions before it, so a later run lists only what changes:
 - a concept named again replaces its earlier form, and a concept decided on the other level moves there, with the mappings to it;
 - `removed: [{ref, reason, replaced_by}]` takes a concept out, with its relations and the mappings to it;
 - `relations` join the existing ones, on the level of their `from` end, so activities can be ordered (`precedes`) and either end may sit on the other level (`task:<id>` or `domain:<id>` when an id is on both). `remove_relations: [{relation: [from, type, to], reason}]` takes one out;
-- `support_kinds: {<ref>: <kind> | {kind, overlap, differs}}` says how a supporting concept relates when it is not simply a specialization. A concept taken out of `support` loses the mapping this step gave it. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target.
+- on a concept, next to its `support`, `support_kinds: {<ref>: <kind> | {kind, overlap, differs}}` says how a supporting concept relates when it is not simply a specialization (by default specialization, on the task level realization). It changes only a mapping this step added; one made at stage 4 or 6 is changed with `remap`. A concept taken out of `support` loses the mapping this step gave it. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target;
+- `amend: [{ref, reason, alt, add_support, drop_support, support_kinds}]` changes only those fields of a shared concept an earlier decision made: its label, category, definition, status and note stay, and the reason is added to the recorded one. To change the label, category or definition, name the concept again;
+- `remap: [{concept, target, kind, reason, overlap, differs}]` changes the kind of a project concept's mapping made at any stage, and `kind: null` removes it. A partial needs `overlap` and `differs` (§4); the mapping's note keeps the earlier note, marked `Earlier, as <kind>:`, and records the change and its reason. A mapping may not be removed while its concept is in the target's support (`amend` with `drop_support` first);
+- `settled` and `disputed` say what a partial mapping or a contradiction does to a shared concept (§10). A `settled` entry whose mapping has since gone, or is no longer partial, settles nothing: `consolidate` and `update-check` warn about it, until a later file withdraws it with `unsettled: [{concept, target, reason}]`.
+
+After each file, `support.projects` and `families` of every shared concept are refreshed: the projects of its evidence and of every project concept mapped onto it, as stage 7 counts them.
 
 ### 6. Verification
 
 Every evidence claim is checked: the cited lines are read from the source at the cited commit, and the decision port (or, in llm mode, a model other than the extractor) judges whether they support the claim. The **verified-evidence share** is reported. A claim whose evidence does not hold becomes `disputed` or is removed.
 
-Low-confidence and disputed judgements (mapping kind, category) and every `partial` mapping are rechecked by a model other than the one that made them. The default rechecker is `process.recheck` (another vendor, e.g. `{harness: codex, model: …}`); its `fallback` (e.g. the other Claude model) may answer only with a `fallback_reason`, and `verify --apply` refuses any other rechecker. The report counts rechecks by policy and gives the **recheck change rate** per item type, including `mapping-partial`.
+Low-confidence and disputed judgements (mapping kind, category), every `partial` mapping and **every evidence item the decision port judged unsupported** are rechecked by a model other than the one that made them. The default rechecker is `process.recheck` (another vendor, e.g. `{harness: codex, model: …}`); its `fallback` (e.g. the other Claude model) may answer only with a `fallback_reason`, and `verify --apply` refuses any other rechecker. The report counts rechecks by policy and gives the **recheck change rate** per item type, including `mapping-partial`, over the verdicts given in this run's pack; a verdict carried from an earlier pack is counted apart (`carried`), not again.
+
+A mapping is rechecked against the target's shared definition as it is when `verify` runs: the owner's shared-level files after consolidation, or, for an overlay target, the release read in stage 4. The item carries it as `target` with `as_of`, and the pack says which version in `shared_definitions`. A verdict given against an earlier wording is not carried.
+
+**What `verify --apply` removes.** A score from the decision port never removes a claim on its own: a cheap classifier is often reversed by the recheck. Evidence is dropped only when:
+- its cited lines are missing at the cited commit (a mechanical fact);
+- the recheck confirmed the negative judgement, or changed a judgement to `unsupported`;
+- the owner decided so in `verify/<p>.owner.json`: `{by: <owner>, verdicts: [{claim, path, lines, verdict: supported | unsupported, reason}]}`, where an entry without `path` covers every evidence item of the claim. Only the owner writes this file, never an agent. Its verdicts override every other judgement.
+
+A negative judgement that nothing confirmed keeps its evidence and its claim. Such a negative is left unanswered in the recheck, or has no independent rechecker. The evidence gets an `unverified` note, and so does the claim when all its evidence is of that kind. It is listed in `applied.unverified`, and the run report counts it. The recheck may leave these items unanswered; every other recheck item still needs a verdict and a reason.
+
+Every removed claim is recorded in `applied.removed_claims` of `verify/<p>.json`, with its reason and its original form (`restore`). This includes a relation removed because one of its ends was removed: it has `cascade_of` and its own evidence verdicts, since its evidence may have held. A `broader` link to a removed concept is listed in `applied.detached_broader`. A mapping that the recheck changes to another target or kind obeys the rules of `map --apply`: a known target, a kind the preset allows, and for `partial` both `overlap` and `differs` in the verdict's value. They are written into the note, as in stage 4.
+
+**Verifying again.** `verify --apply` runs once per verification. For claims added or changed afterwards (by a later decision, for example), `ontologizer verify <p> --changed` asks the decision port only about evidence whose claim wording or citation (path, lines, commit, kind) changed. It keeps the earlier judgements of the rest, and `--since <run>` keeps those of another run's verify. In both a full and a `--changed` verify, a recheck verdict given on the same content is carried into the new pack (`carried`) and is not asked again. The earlier answers file is set aside as `<p>.recheck.answers.prev.json`, because its ids are positions in the earlier pack. Then `verify --apply` runs as usual.
 
 An **absence claim** ("the project has no X") requires a recorded protocol: what was searched for, where, and how (queries, paths, tools), and the result.
 
@@ -142,9 +161,17 @@ Leave-one-out: for each project, the support of every shared concept is recomput
 
 ### 8. Review and calibration
 
-`ontologizer review build` writes `review.yaml`. It lists every domain and task concept, with no cap, together with its support, families, stability, verification share and evidence, and every relation of the shared levels. The reviewing agent checks each one in the source and marks it `accept`, `reject` or `revise`. Two things are flagged: `category_differs`, when a supporting project concept has another category (a recheck in stage 6 does not reach the shared concept), and `counterpart: false`, when no relation joins the project concepts behind a relation's ends.
+`ontologizer review build` writes `review.yaml`. It lists every domain and task concept, with no cap, together with its support, families, stability, verification share and evidence, and every relation of the shared levels. The reviewing agent checks each one in the source and marks it `accept`, `reject` or `revise`. Two things are flagged: `category_differs`, when a supporting project concept has another category (a recheck in stage 6 does not reach the shared concept), and `counterpart: false`, when no project relation stands behind a shared relation.
 
-A verdict stands only while what it judged is unchanged. After an edit, `review build` reopens just what changed, so a correction needs no second full pass; a fresh pass tends to rewrite accepted wording rather than converge. `review build --since <run>` carries the accepted verdicts of an earlier run in the same way, and the gate records how many were carried.
+A project relation `x --t--> y` is a counterpart of the shared relation `A --t--> B` when it has the same type, goes in the same direction, `x` stands for `A` and `y` for `B`. A project concept stands for the shared concept it maps to (any mapping kind), and so does every project concept narrower than it (`broader`, any number of steps). It also stands for every shared concept that one specializes in turn: `broader`, or a `specialization` mapping between shared concepts, any number of steps. A relation between narrower concepts instantiates the relation between the wider ones, never the reverse: an edge of a wider project concept does not count for a narrower shared one. When there is no counterpart, `counterpart_other` lists the project relations between the same ends with another type or in the other direction.
+
+Each supporting concept shows its stage 6 result in `verified`: the share of its evidence that held in this run or, when this run did not check it, in the latest earlier run (the `--since` run, then the run that review was built `--since`, and so on) that checked the evidence it has now, named in `verified_in`. Evidence changed since then is `unchecked`. A concept that stage 6 removed for want of evidence and that is back in the project file is `restored`, with the result that removed it in `verified_before`: check its evidence in the source.
+
+A verdict stands only while what it judged is unchanged: the concept's label, category and definition, or the relation's ends and type. After an edit, `review build` reopens just what changed, so a correction needs no second full pass; a fresh pass tends to rewrite accepted wording rather than converge. `review build --since <run>` carries the accepted verdicts of an earlier run in the same way and marks them `carried_from: <run>`.
+
+New support does not reopen a verdict, or every update would reset them all. A carried verdict whose supporting project concepts changed keeps `judged_support` (what it was given on) and `support_changed` (the concepts added and removed), and `review build` lists those items. The reviewer looks at each, changes the verdict if it no longer holds, and deletes `support_changed`; until then rebuilds keep the flag, and the gate records how many were still flagged.
+
+A carried verdict is the earlier run's only while it is unchanged. To reopen one, set its `verdict` to null: rebuilds keep it open (`reopened: <run>`) instead of carrying it again. A verdict or comment the reviewer changes is the reviewer's own: it loses `carried_from`, its comment reaches the concept's note, and it does not count among the carried verdicts the gate records. `review apply` adds each review remark to a note once, so applying the same review again changes nothing.
 
 Recording the gate is the owner's call: the reviewer's verdicts become the record only when the owner asks for `review apply` or runs it. `ontologizer review apply --by <model> --effort <effort>` makes the accepted ones `asserted` in the shared-level files and records the review gate with the reviewer. Only after that does the owner run `release`.
 
@@ -175,19 +202,34 @@ An ontology of a topic does not wait for a corpus. It starts from what exists an
 | `equivalence` | the shared concept gains an origin; a second family confirms it, and the next review can make it `asserted` |
 | `specialization` | a candidate for a narrower concept |
 | none | a candidate for a new concept in stage 5 |
-| `partial` or a contradiction | `disputed`; the earlier claim is not overwritten silently |
+| `partial` or a contradiction | `disputed` at the review, with both readings kept, unless a decision settles it |
 
 A new family means a new frame, so its approval is asked for again.
 
+**Disputes need no question.** The rule is applied by the kit. A project concept that maps onto a shared one as `partial`, or that is itself `disputed`, is an open reading, and at `review apply` it makes the shared concept `disputed` whatever the verdict; the concept cites both sides and its note names them, so the earlier claim is never overwritten silently. The model deciding consolidation weighs each one. Where the shared definition holds for both sides, or the difference stays at project level, it records `settled: [{concept, target, reason}]` and the concept keeps its status. A contradiction no mapping shows goes in as `disputed: [{ref, reason}]`, and a later `settled: [{target, reason}]` ends it. A disputed statement keeps two readings, so a concept with one project concept behind it stays as it is, and `review apply` names it. A new source can reopen a concept only by bringing a new reading. `review build` shows the readings, and `update-check` and the report list what is disputed; none of this blocks a release.
+
+**Writing the levels.** Levels that refer to each other, such as a task level with relations to new domain concepts and a domain level with phases on new activities, go in one call: `ontologizer ingest <domain> <task> <project>…`. Each file is checked against the others as they will be, and nothing is written unless all pass.
+
 **The checks.** Before a release, `ontologizer update-check <base release> --base-run <the run that built it>` holds the working levels to the release. It needs no new source. It blocks on:
 - a concept removed, or a relation gone, with no recorded reason;
-- a changed concept that none of its cited passages supports, judged through the decision port at the cited commits;
-- a competency question that lost its answer since the base run. Give questions a `query:`, so this does not rest on hand-written answers;
-- a new clash, or a report older than the shared levels.
+- a changed concept that none of its judged cited passages supports, judged through the decision port at the cited commits;
+- a competency question that lost its answer since the base run, unless the downgrade is recorded with a reason (below). Give questions a `query:`, so this does not rest on hand-written answers;
+- a new clash, or a report older than the shared levels or the run's `cq.yaml`.
+
+**A reasoned downgrade.** A hand-written status that was overstated in the base run should be lowered, not kept to pass the check. In the run's `cq.yaml` the question then carries `downgrade: {from: <the base run's status>, reason: <why it no longer holds>}`, e.g. `cq3: {status: partial, by: [...], downgrade: {from: answered, reason: "the earlier answer named a concept the sources do not define"}}`. `report` refuses a `downgrade` whose `from` is not above the new status or that has no reason. `update-check` lists the question under *Questions downgraded with a reason* instead of blocking, when `from` is the base run's status. A downgrade without a reason, or from another status, still blocks. A question answered by its `query:` takes its status from the store, so a `downgrade` does not apply to it.
+
+**A retired question.** A question the new frame no longer has blocks, unless the frame lists it under `retired_questions: [{id, reason}]` (an id that is still a question is refused). The owner approves that frame, so the reason is the owner's word; `update-check` lists the question under *Questions retired by the frame*.
+
+**The evidence share is reported, not a blocker.** For a changed or moved concept, the cited passages are the lines of every project concept mapped to it, under any mapping kind, and the decision port judges each against the new definition. The share of supporting passages mixes counterparts: the lines of a `specialization` or `partial` counterpart need not carry the whole shared definition, so a share below 1 is not a defect by itself, and a blocker on it would refuse a sound generalization. When no judged passage supports the change, nothing behind the concept says what it now says, and that blocks. Below `process.update_check_min_share` (default 0.5), the report gives a warning that names each passage that does not support the change (path, lines, project concept, mapping kind), to be read before the release. Passages that cannot be read at their commit, or that the decision port did not answer, are warnings too.
 
 The result is `runs/<run>/update-check.{json,md}` and a recorded gate. With `process.update_check: true`, `release` of a level with an earlier release requires that gate, clean, over the files as they are; `--unreviewed` overrides it and is recorded. `release-compare <base> working` compares by meaning before the release, for concepts renamed or split.
 
-Then `review build --since <base run>` and the review of what changed, as in §8.
+Then `review build --since <base run>` and the review of what changed, as in §8. `review apply` writes into the shared-level files (statuses, review notes, rejected concepts and relations removed), so the update-check gate recorded before it no longer covers them, and `review apply` says so. The gate is not carried over such a change: a rejection removes concepts and relations, which is what the check must see. The order before a release is therefore:
+
+1. `update-check` to find what blocks, and fix it;
+2. `review build --since <base run>`, the review, `review apply`;
+3. `report`, then `update-check` again, over the files as the review left them;
+4. the owner's `release`.
 
 **Foreign ontologies.** `import-graph` refuses a file with none of the kit's vocabulary in a graph with a role: the kit would see nothing there, and the write would replace the graph. To analyse such a file, make it a source as above. To keep it verbatim, import it into a graph with no role.
 
@@ -231,7 +273,8 @@ Every metric is computed by code from the run directory and is written to `repor
 | Extraction agreement | matched concepts ÷ (concepts of A + concepts of B − matched), per project pair of extractors | 3 |
 | Jev–LLM disagreement rate | questions answered by both Jev and an LLM (the category second opinion; the mapping candidate against the chosen target) where the answers differ ÷ such questions | 4, 6 |
 | Verified-evidence share | evidence items judged supporting ÷ evidence items checked; unchecked items are counted separately | 6 |
-| Verified-evidence share after the recheck | the same, with the recheck's verdicts overriding the first judgement | 6 |
+| Verified-evidence share after the recheck | the same, with the recheck's verdicts (and the owner's) overriding the first judgement | 6 |
+| Unverified negatives | evidence items judged unsupported that no recheck or owner confirmed, kept with their claims; with the number of claims removed in verification | 6 |
 | Leave-one-out stability | shared concepts marked `stable` ÷ shared concepts | 7 |
 | Competency-question coverage | questions answered ÷ questions; `partial` and `unanswered` are listed by id | 7 |
 | Consistency clashes | contradictions the engine's reasoner finds over the store (`onto_reason`, RDFS, dry run); releases have their own IRIs, so a clash lies inside one version | 7 |
@@ -249,7 +292,7 @@ The report also records, per stage, the decision mode and the number of decision
 | 3 | `ontologizer reconcile PROJECT` (pairs and disputes), `ontologizer reconcile PROJECT --apply` |
 | 4 | `ontologizer map PROJECT`, `ontologizer map PROJECT --apply` |
 | 5 | `ontologizer group`, then `consolidate consolidation/<run>.yaml` |
-| 6 | `ontologizer verify PROJECT`, `ontologizer verify PROJECT --apply` |
+| 6 | `ontologizer verify PROJECT [--changed \| --since RUN]`, `ontologizer verify PROJECT --apply` |
 | 7 | `ontologizer stability`, `ontologizer report`, `ontologizer report --compare A B`, `ontologizer release-compare A B [--run-a ID]` |
 | 8 | `ontologizer review build`, `ontologizer review apply`, `ontologizer gold sample`, `ontologizer gold calibrate` |
 | 9 | in the target owner's overlay run: `brief`, `reconcile`, `map`, `verify` on the target, then `ontologizer overlay [--previous FILE --compare FILE]` |

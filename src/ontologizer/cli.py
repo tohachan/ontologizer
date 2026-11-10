@@ -2,8 +2,9 @@
 
   ontologizer status                         graphs, sizes, policies
   ontologizer bootstrap                      import pinned upper/kit graphs and generated shapes
-  ontologizer ingest FILE.json [--dry-run]   extraction JSON → validate → SHACL → write route
-  ontologizer validate FILE.json             extraction schema + SHACL, no write
+  ontologizer ingest FILE.json… [--dry-run]  extraction JSON → validate → SHACL → write route; several files
+                                             are validated against each other and written together
+  ontologizer validate FILE.json…            extraction schema + SHACL, no write
   ontologizer export-graph PATH [--turtle]   one graph to stdout
   ontologizer import-graph PATH FILE.ttl     replace one research graph from Turtle (via route)
   ontologizer release PATH… VERSION          release graphs as one version (version-distinct term IRIs)
@@ -21,7 +22,7 @@ Analysis process (docs/process.md), each with --run ID (default `process.run`):
   ontologizer reconcile PROJECT [--apply]    stage 3: pairs, agreement, disputes / build application/<p>.json
   ontologizer map PROJECT [--apply]          stage 4: candidate targets, category second opinion / write maps_to
   ontologizer group                          stage 5: unmapped concepts grouped by meaning, family support
-  ontologizer verify PROJECT [--apply]       stage 6: every claim against its source; rechecks
+  ontologizer verify PROJECT [--changed|--apply]   stage 6: every claim (or only the new and changed) against its source; rechecks
   ontologizer stability | report [--compare A B]   stage 7
   ontologizer release-compare A B [--run-a ID]    two releases by meaning: kept, added, dropped, with reasons
   ontologizer review build|apply --by MODEL [--effort E]   stage 8: agent review; gold sample NAME | gold calibrate FILE
@@ -102,17 +103,27 @@ def _load_doc(r: WriteRoute, file: str) -> tuple[dict, Graph]:
 def cmd_ingest(args) -> int:
     r = _route(args)
     try:
-        doc, g = _load_doc(r, args.file)
-        res = r.write(doc["graph"], g, op="replace", reason=f"ingest {Path(args.file).name}",
-                      dry_run=args.dry_run)
+        graphs: dict[str, Graph] = {}
+        for f in args.file:
+            doc, g = _load_doc(r, f)
+            if doc["graph"] in graphs:
+                print(f"{f}: graph {doc['graph']} is named twice", file=sys.stderr)
+                return 2
+            graphs[doc["graph"]] = g
+        reason = "ingest " + ", ".join(Path(f).name for f in args.file)
+        results = r.write_together(graphs, reason=reason, dry_run=args.dry_run)
     except ExtractionError as e:
         print("extraction schema errors:\n- " + "\n- ".join(e.errors), file=sys.stderr)
         return 2
     except WriteRejected as e:
         print(str(e), file=sys.stderr)
+        if len(args.file) == 1:
+            print("If this file refers to something new in another file you are changing, such as the other shared "
+                  "level, pass them together: ontologizer ingest A.json B.json", file=sys.stderr)
         return 3
-    verb = "would change" if args.dry_run and res.changed else ("written" if res.changed else "unchanged")
-    print(f"{res.graph}: {verb}; {res.triples} triples (+{res.added} −{res.removed}) hash {res.content_hash[:12]}")
+    for res in results:
+        verb = "would change" if args.dry_run and res.changed else ("written" if res.changed else "unchanged")
+        print(f"{res.graph}: {verb}; {res.triples} triples (+{res.added} −{res.removed}) hash {res.content_hash[:12]}")
     return 0
 
 
@@ -249,9 +260,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("bootstrap").set_defaults(fn=cmd_bootstrap)
-    s = sub.add_parser("ingest"); s.add_argument("file"); s.add_argument("--dry-run", action="store_true")
+    s = sub.add_parser("ingest"); s.add_argument("file", nargs="+"); s.add_argument("--dry-run", action="store_true")
     s.set_defaults(fn=cmd_ingest)
-    s = sub.add_parser("validate"); s.add_argument("file"); s.set_defaults(fn=cmd_validate)
+    s = sub.add_parser("validate"); s.add_argument("file", nargs="+"); s.set_defaults(fn=cmd_validate)
     s = sub.add_parser("export-graph"); s.add_argument("path"); s.add_argument("--turtle", action="store_true")
     s.set_defaults(fn=cmd_export_graph)
     s = sub.add_parser("import-graph"); s.add_argument("path"); s.add_argument("file")

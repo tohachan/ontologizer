@@ -318,3 +318,44 @@ def test_concept_matrix_warns_when_a_project_maps_outside_its_rows(cfg, route, t
     res = MarkdownExporter(cfg).export(snap, tmp_path / "b", ["projects/*"], context=["shared/*"])
     assert len(res["warnings"]) == 1 and "outside the rows (urn:ontologizer:shared/domain:)" in res["warnings"][0]
     assert "**Warning:**" in (tmp_path / "b" / "compare" / "concept-matrix.md").read_text()
+
+
+def _two_levels():
+    domain = {"graph": "shared/domain", "concepts": [{
+        "id": "gate", "label": "Gate", "level": "domain", "upper_category": "Abstract",
+        "definition": "A check on a step.", "evidence": [{"path": "docs/plan.md", "kind": "plan"}]}],
+        "relations": [{"from": "gate", "to": "task:step", "type": "uses", "label": "checks"}]}
+    task = {"graph": "shared/task", "concepts": [{
+        "id": "step", "label": "Step", "level": "task", "upper_category": "Event",
+        "definition": "A step of the work.", "evidence": [{"path": "docs/plan.md", "kind": "plan"}]}],
+        "relations": [{"from": "step", "to": "domain:gate", "type": "dependsOn", "label": "guarded by"}]}
+    return domain, task
+
+
+def test_levels_that_refer_to_each_other_cannot_be_written_one_by_one(cfg, route):
+    domain, task = _two_levels()
+    with pytest.raises(WriteRejected):
+        route.write("shared/domain", to_graph(domain, cfg, route.preset), dry_run=True)
+    with pytest.raises(WriteRejected):
+        route.write("shared/task", to_graph(task, cfg, route.preset), dry_run=True)
+
+
+def test_write_together_validates_against_each_other_then_writes(cfg, route):
+    domain, task = _two_levels()
+    graphs = {d["graph"]: to_graph(d, cfg, route.preset) for d in (domain, task)}
+    before = route.engine.writes
+    dry = route.write_together(graphs, dry_run=True)
+    assert all(r.changed for r in dry) and route.engine.writes == before
+    route.write_together(graphs, reason="t")
+    assert route.engine.writes == before + 2
+    assert not any(r.changed for r in route.write_together(graphs, dry_run=True))
+
+
+def test_write_together_writes_nothing_when_one_fails(cfg, route):
+    domain, task = _two_levels()
+    domain["relations"] = [{"from": "gate", "to": "task:nothing", "type": "uses", "label": "checks"}]
+    graphs = {d["graph"]: to_graph(d, cfg, route.preset) for d in (domain, task)}
+    before = route.engine.writes
+    with pytest.raises(WriteRejected):
+        route.write_together(graphs, reason="t")
+    assert route.engine.writes == before
