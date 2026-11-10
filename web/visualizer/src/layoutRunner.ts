@@ -19,34 +19,24 @@ export class LayoutRunner {
   }
 }
 
-let worker: Worker | null = null;
-let seq = 0;
-const pending = new Map<number, { resolve: (g: ElkNode) => void; reject: (e: Error) => void }>();
+// In the browser ELK runs in its own worker script (elk-worker.min.js, served as an asset) behind
+// elk-api; elk.bundled.js cannot run inside a web worker, because there it does not export the
+// inner worker it creates.
+let api: { layout: (g: ElkNode) => Promise<ElkNode> } | null = null;
 
-function viaWorker(graph: ElkNode): Promise<ElkNode> {
-  if (!worker) {
-    worker = new Worker(new URL('./elk.worker.ts', import.meta.url), { type: 'module' });
-    worker.onmessage = (e: MessageEvent<{ id: number; graph?: ElkNode; error?: string }>) => {
-      const p = pending.get(e.data.id);
-      pending.delete(e.data.id);
-      if (!p) return;
-      if (e.data.graph) p.resolve(e.data.graph); else p.reject(new Error(e.data.error ?? 'layout failed'));
-    };
-    worker.onerror = () => {
-      for (const p of pending.values()) p.reject(new Error('the layout worker stopped'));
-      pending.clear();
-      worker = null;
-    };
+async function viaWorker(graph: ElkNode): Promise<ElkNode> {
+  if (!api) {
+    const [{ elkConstructor }, mod, { default: workerUrl }] = await Promise.all([
+      import('./elkModule'), import('elkjs/lib/elk-api'), import('elkjs/lib/elk-worker.min.js?url')]);
+    const Api = elkConstructor(mod) as unknown as new (o: { workerUrl: string }) => { layout: (g: ElkNode) => Promise<ElkNode> };
+    api = new Api({ workerUrl });
   }
-  const id = ++seq;
-  return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    worker!.postMessage({ id, graph });
-  });
+  return api.layout(graph);
 }
 
 async function inThread(graph: ElkNode): Promise<ElkNode> {
-  const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
+  const { elkConstructor } = await import('./elkModule');
+  const ELK = elkConstructor();
   return new ELK().layout(graph);
 }
 
