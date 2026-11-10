@@ -122,8 +122,12 @@ A decision file adds to the decisions before it, so a later run lists only what 
 - a concept named again replaces its earlier form, and a concept decided on the other level moves there, with the mappings to it;
 - `removed: [{ref, reason, replaced_by}]` takes a concept out, with its relations and the mappings to it;
 - `relations` join the existing ones, on the level of their `from` end, so activities can be ordered (`precedes`) and either end may sit on the other level (`task:<id>` or `domain:<id>` when an id is on both). `remove_relations: [{relation: [from, type, to], reason}]` takes one out;
-- `support_kinds: {<ref>: <kind> | {kind, overlap, differs}}` says how a supporting concept relates when it is not simply a specialization. A concept taken out of `support` loses the mapping this step gave it. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target;
+- on a concept, next to its `support`, `support_kinds: {<ref>: <kind> | {kind, overlap, differs}}` says how a supporting concept relates when it is not simply a specialization (by default specialization, on the task level realization). It changes only a mapping this step added; one made at stage 4 or 6 is changed with `remap`. A concept taken out of `support` loses the mapping this step gave it. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target;
+- `amend: [{ref, reason, alt, add_support, drop_support, support_kinds}]` changes only those fields of a shared concept an earlier decision made: its label, category, definition, status and note stay, and the reason is added to the recorded one. To change the label, category or definition, name the concept again;
+- `remap: [{concept, target, kind, reason, overlap, differs}]` changes the kind of a project concept's mapping made at any stage, and `kind: null` removes it. A partial needs `overlap` and `differs` (§4); the mapping's note records the earlier kind and the reason. A mapping may not be removed while its concept is in the target's support (`amend` with `drop_support` first);
 - `settled` and `disputed` say what a partial mapping or a contradiction does to a shared concept (§10).
+
+After each file, `support.projects` and `families` of every shared concept are refreshed: the projects of its evidence and of every project concept mapped onto it, as stage 7 counts them.
 
 ### 6. Verification
 

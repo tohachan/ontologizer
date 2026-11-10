@@ -14,7 +14,12 @@ Usage: ontologizer consolidate DECISIONS.yaml  (shared-level and application fil
   and removes the ones this step added earlier for a concept no longer in the support;
 - `settled:` ({concept, target, reason}) records why a partial or disputed project concept need not make
   its shared concept disputed, and `disputed:` ({ref, reason}) declares a dispute no mapping shows; a later
-  `settled:` ({target, reason}) ends one. `review apply` acts on them (`shared.disputes`).
+  `settled:` ({target, reason}) ends one. `review apply` acts on them (`shared.disputes`);
+- `amend:` ({ref, reason, alt, add_support, drop_support, support_kinds}) changes those fields of a shared concept
+  an earlier decision made, keeping its label, category, definition, status and note;
+- `remap:` ({concept, target, kind, reason, overlap, differs}) re-kinds a project concept's mapping made at any
+  earlier stage, or removes it with `kind: null`;
+- `support.projects`/`families` are refreshed on every run from the evidence and the mappings onto each concept.
 Idempotent: re-running on its own output changes nothing. Ingest afterwards.
 
 With a frame (docs/process.md §5) every new shared concept also needs a
@@ -112,6 +117,8 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
             if lv == level and cid in existing:
                 existing[cid]["note"] = f"weak support after step 2: {why}"
         doc["concepts"] = sorted(existing.values(), key=lambda c: c["id"])
+    amends, errs = _amend(dec, shared, concepts, frame, Path(decision_file).name)
+    errors += errs
 
     gone = {x["ref"] for x in dec.get("removed") or []}
     for level, doc in shared.items():
@@ -162,21 +169,25 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
                     unbound += len(maps) - len(kept)
                     c["maps_to"] = kept
             for ref in refs:
-                p, cid = ref.split(":")
-                c = concepts[(p, cid)]
-                how = (n.get("support_kinds") or {}).get(ref)
-                how = {"kind": how} if isinstance(how, str) else (how or {})
-                have = next((m for m in c.get("maps_to", []) if m.get("target") == tgt), None)
-                if have is not None:
-                    if how and str(have.get("note", "")).startswith(ADDED):
-                        have.update(how)
-                    continue
-                kind = att.get("kind") if ref in att.get("ids", []) else ("realization" if level == "task" else "specialization")
-                if level == "task" and kind == "roleOf":
-                    kind = "realization"
-                c.setdefault("maps_to", []).append({"target": tgt, "kind": kind, "confidence": "medium",
-                                                    "note": f"{ADDED} {tgt}", **how})
-                added += 1
+                kind = att.get("kind") if ref in att.get("ids", []) else None
+                added += _support_mapping(concepts[tuple(ref.split(":"))], tgt, level, kind,
+                                          (n.get("support_kinds") or {}).get(ref))
+    for tgt, add, drop, kinds in amends:   # an amended concept: only the support it names changes
+        level = tgt.split(":")[0]
+        for ref in drop:
+            c = concepts[tuple(ref.split(":"))]
+            maps = c.get("maps_to", [])
+            kept = [m for m in maps if not (m.get("target") == tgt and str(m.get("note", "")).startswith(ADDED))]
+            unbound += len(maps) - len(kept)
+            c["maps_to"] = kept
+        for ref in sorted(set(add) | set(kinds)):
+            added += _support_mapping(concepts[tuple(ref.split(":"))], tgt, level, None, kinds.get(ref))
+    remapped, errs = _remap(dec, shared, concepts, Path(decision_file).name)
+    if errs:
+        print("\n".join(errs), file=sys.stderr)
+        return 1
+    if frame is not None:
+        _refresh_support(shared, concepts, frame)
     for lv in seeds:
         save(seeds[lv], shared[lv])
     for p, (f, d) in extractions.items():
@@ -185,8 +196,163 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
     print(f"domain concepts {len(domain_ids)}, task concepts {len(task_ids)}, relations {len(rels)}; "
           f"rebound {rebound} candidates, added {added} mappings, {left} single-project candidates left"
           + (f"; removed {len(gone)} concepts, {unbound} mappings" if gone or unbound else "")
-          + (f"; moved {len(moved)} concepts across levels" if moved else ""))
+          + (f"; moved {len(moved)} concepts across levels" if moved else "")
+          + (f"; amended {len(amends)} concepts" if amends else "")
+          + (f"; changed {remapped} earlier mappings" if remapped else ""))
     return 0
+
+
+def _support_mapping(c: dict, tgt: str, level: str, kind: str | None, how) -> int:
+    """Give a supporting project concept its mapping to `tgt` when it has none; 1 when one was added.
+    `support_kinds` may re-kind a mapping this step added, never one made at an earlier stage (`remap:` does that)."""
+    how = {"kind": how} if isinstance(how, str) else (how or {})
+    have = next((m for m in c.get("maps_to", []) if m.get("target") == tgt), None)
+    if have is not None:
+        if how and str(have.get("note", "")).startswith(ADDED):
+            have.update(how)
+        return 0
+    kind = kind or ("realization" if level == "task" else "specialization")
+    if level == "task" and kind == "roleOf":
+        kind = "realization"
+    c.setdefault("maps_to", []).append({"target": tgt, "kind": kind, "confidence": "medium",
+                                        "note": f"{ADDED} {tgt}", **how})
+    return 1
+
+
+AMEND_KEYS = {"ref", "reason", "alt", "add_support", "drop_support", "support_kinds"}
+
+
+def _graph_refs(c: dict) -> list[str]:
+    """The supporting project concepts of a shared concept, as `project:id`, from its graph evidence."""
+    out = []
+    for e in c.get("evidence", []):
+        path = str(e.get("path", ""))
+        if e.get("kind") == "graph" and path.startswith("projects/") and "#" in path:
+            p, _, cid = path[len("projects/"):].partition("#")
+            out.append(f"{p}:{cid}")
+    return out
+
+
+def _amend(dec: dict, shared: dict, concepts: dict, frame, name: str) -> tuple[list, list[str]]:
+    """`amend: [{ref, reason, alt?, add_support?, drop_support?, support_kinds?}]`: change some fields of a shared
+    concept that an earlier decision made, keeping its label, category, definition, status and note. Changing one
+    of those means naming the concept again in `new_domain`/`new_task`."""
+    errs, out = [], []
+    decided = {f"{lv}:{n['id']}" for lv, key in (("domain", "new_domain"), ("task", "new_task"))
+               for n in dec.get(key, [])}
+    for x in dec.get("amend") or []:
+        ref = str(x.get("ref", ""))
+        lv, _, cid = ref.partition(":")
+        c = next((c for c in shared.get(lv, {}).get("concepts", []) if c["id"] == cid), None)
+        extra = sorted(set(x) - AMEND_KEYS)
+        if extra:
+            errs.append(f"amend {ref}: {extra} cannot be amended; name the concept again to change its label, "
+                        f"category or definition" if set(extra) & {"label", "def", "cat"} else f"amend {ref}: unknown {extra}")
+        if not str(x.get("reason", "")).strip():
+            errs.append(f"amend {ref}: `reason` required")
+        if c is None:
+            errs.append(f"amend {ref}: not a shared concept (`domain:<id>` or `task:<id>`)")
+            continue
+        if ref in decided:
+            errs.append(f"amend {ref}: also decided as a concept in this file")
+            continue
+        add, drop = list(x.get("add_support") or []), list(x.get("drop_support") or [])
+        kinds = dict(x.get("support_kinds") or {})
+        if not (add or drop or kinds or "alt" in x):
+            errs.append(f"amend {ref}: nothing to change")
+        have = _graph_refs(c)
+        for r in add:
+            if tuple(r.split(":")) not in concepts:
+                errs.append(f"amend {ref}: unknown project concept {r}")
+        for r in drop:
+            if r not in have:
+                errs.append(f"amend {ref}: {r} is not in its support")
+        after = [r for r in have if r not in drop] + [r for r in add if r not in have]
+        for r in kinds:
+            if r not in after:
+                errs.append(f"amend {ref}: support_kinds names {r}, which is not in its support")
+        if not after:
+            errs.append(f"amend {ref}: no support would be left; remove the concept instead")
+        if errs:
+            continue
+        if "alt" in x:
+            c["alt_labels"] = list(x["alt"] or [])
+        c["evidence"] = ([e for e in c.get("evidence", []) if not (e.get("kind") == "graph" and any(
+            e.get("path") == f"projects/{r.split(':')[0]}#{r.split(':')[1]}" for r in drop))]
+            + [{"path": f"projects/{r.split(':')[0]}#{r.split(':')[1]}", "kind": "graph"} for r in add if r not in have])
+        if frame is not None:
+            s = c.setdefault("support", {})
+            line = f"Amended in {name}: {x['reason']}"
+            if line not in str(s.get("reason", "")):
+                s["reason"] = f"{s.get('reason', '')} {line}".strip()
+            s["amended"] = sorted(set(s.get("amended") or []) | {name})
+        out.append((ref, add, drop, kinds))
+    return out, errs
+
+
+def _remap(dec: dict, shared: dict, concepts: dict, name: str) -> tuple[int, list[str]]:
+    """`remap: [{concept, target, kind, reason, overlap?, differs?}]`: change the kind of a project concept's mapping
+    made at any earlier stage, or remove it with `kind: null`. A removed mapping may not leave the concept in the
+    target's support. Re-running changes nothing."""
+    errs, n = [], 0
+    support = {f"{lv}:{c['id']}": set(_graph_refs(c)) for lv, doc in shared.items() for c in doc["concepts"]}
+    for x in dec.get("remap") or []:
+        ref, tgt = str(x.get("concept", "")), str(x.get("target", ""))
+        if not str(x.get("reason", "")).strip():
+            errs.append(f"remap {ref} -> {tgt}: `reason` required")
+        if "kind" not in x:
+            errs.append(f"remap {ref} -> {tgt}: `kind` required (null removes the mapping)")
+        c = concepts.get(tuple(ref.split(":")))
+        if c is None:
+            errs.append(f"remap {ref}: unknown project concept")
+            continue
+        m = next((m for m in c.get("maps_to", []) if m.get("target") == tgt), None)
+        kind = x.get("kind")
+        if m is None:
+            if kind is not None:      # removed earlier and named again: nothing to change it to
+                errs.append(f"remap {ref} -> {tgt}: no such mapping")
+            continue
+        if kind is None:
+            if ref in support.get(tgt, set()):
+                errs.append(f"remap {ref} -> {tgt}: it still supports {tgt}; drop it there first (amend: drop_support)")
+                continue
+        elif kind == "partial" and not ((x.get("overlap") or m.get("overlap")) and (x.get("differs") or m.get("differs"))):
+            errs.append(f"remap {ref} -> {tgt}: a partial mapping needs `overlap` and `differs`")
+            continue
+        if errs:
+            continue
+        if kind is None:
+            c["maps_to"] = [k for k in c["maps_to"] if k is not m]
+            n += 1
+            continue
+        if m.get("kind") != kind:
+            m["note"] = f"{m.get('note', '')} Changed in step 3 ({name}) from {m.get('kind')}: {x['reason']}".strip()
+            m["kind"] = kind
+            n += 1
+        for k in ("overlap", "differs"):
+            if x.get(k):
+                m[k] = x[k]
+        if kind != "partial":
+            m.pop("overlap", None)
+            m.pop("differs", None)
+    return n, errs
+
+
+def _refresh_support(shared: dict, concepts: dict, frame) -> None:
+    """`support.projects` and `families` say who stands behind a shared concept now: the projects of its evidence
+    and of every project concept mapped onto it, as stage 7 counts them. Refreshed on every run."""
+    mapped: dict[str, set[str]] = {}
+    for (p, _), c in concepts.items():
+        for m in c.get("maps_to", []):
+            if m.get("target"):
+                mapped.setdefault(m["target"], set()).add(p)
+    for lv, doc in shared.items():
+        for c in doc["concepts"]:
+            if "support" not in c:
+                continue
+            projs = {r.split(":")[0] for r in _graph_refs(c)} | mapped.get(f"{lv}:{c['id']}", set())
+            c["support"]["projects"] = sorted(projs)
+            c["support"]["families"] = sorted({f for f in (frame.family_of(p) for p in projs) if f})
 
 
 def _check_removals(dec: dict, shared: dict) -> list[str]:
