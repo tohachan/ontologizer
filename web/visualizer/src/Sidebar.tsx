@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from 'react';
-import type { GraphEntry, RelationKind, SearchHit } from './types';
+import type { GraphEntry, RelationKind, SearchHit, ViewSpec } from './types';
 
 export type Selection = {
   primary: string[]; context: string[]; languages: string[];
   seeds: { iri: string; label: string }[]; excluded: string[]; levels: string[];
   kinds: RelationKind[]; hops: number; direction: 'forward' | 'reverse' | 'both';
+  types: string[];                                       // relation type IRIs; empty means every type
+  layout: { direction: ViewSpec['presentation']['direction']; maxNodes: number; maxEdges: number; preset: string };
 };
 
 const KINDS: [RelationKind, string][] = [

@@ -99,12 +99,13 @@ class _M:
 def test_diff_tells_removed_from_not_shown_and_sees_same_size_changes():
     saved = {"entities": {"urn:a": {"label": "A", "status": "asserted"}, "urn:b": {"label": "B", "status": "hypothesis"},
                           "urn:gone": {"label": "G", "status": None}, "urn:hidden": {"label": "H", "status": None}},
-             "relationships": {"r-1": {}, "r-gone": {}}}
+             "relationships": {"r-1": {"status": "asserted", "label": None}, "r-gone": {}}}
     now = {"entities": {"urn:a": {"label": "A2", "status": "asserted"}, "urn:b": {"label": "B", "status": "asserted"},
                         "urn:new": {"label": "N", "status": None}},
-           "relationships": {"r-1": {}, "r-2": {}}}
+           "relationships": {"r-1": {"status": "disputed", "label": None}, "r-2": {"status": None, "label": None}}}
     d = diff(saved, now, _M(["urn:a", "urn:b", "urn:new", "urn:hidden"], ["r-1", "r-2"]),
              {"p": "h1", "q": "h2"}, {"p": "h1", "q": "h3"})
     assert d == {"addedEntities": ["urn:new"], "removedEntities": ["urn:gone"], "notShownEntities": ["urn:hidden"],
                  "changedLabels": ["urn:a"], "changedStatus": ["urn:b"], "addedRelationships": ["r-2"],
-                 "removedRelationships": ["r-gone"], "notShownRelationships": [], "changedGraphs": ["q"]}
+                 "removedRelationships": ["r-gone"], "notShownRelationships": [],
+                 "changedRelationshipStatus": ["r-1"], "changedRelationshipLabels": [], "changedGraphs": ["q"]}

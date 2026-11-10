@@ -463,6 +463,7 @@ class Visualizer:
         for giri in c.snapshot.graphs:
             for p, o in sorted(c.snapshot.graph(giri).predicate_objects(URIRef(iri))):
                 statements.append({"graph": giri, "predicate": str(p), "object": term(o, c.snapshot.id)})
+        out["candidates"] = [to_json(r) for r in c.model.candidates if r.source == iri]   # mappings with no target yet
         out["statements"] = statements[:MAX_STATEMENTS]
         out["statementsOmitted"] = max(0, len(statements) - MAX_STATEMENTS)
         return out

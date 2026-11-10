@@ -244,3 +244,28 @@ def test_200_nodes_compile_well_under_a_second():
     t = time.perf_counter()
     d = compile_view(s, scope(), model(ents, rels))
     assert time.perf_counter() - t < 1.0 and d.nodes
+
+
+def test_an_excluded_intermediate_stays_hidden_under_a_summary():
+    r1, r2, s = _summary(False)
+    d = compile_view(spec(summaries=[s], selection={"entities": [X + "A", X + "C"], "excludedEntities": [X + "B"],
+                                                    "expansion": {"hops": 0, "direction": "both"}}),
+                     scope(), model(CHAIN[:3], [r1, r2]))
+    assert iris(d) == [X + "A", X + "C"] and [e.origin for e in d.edges] == ["summary"]
+
+
+def test_a_summary_through_a_vanished_entity_is_skipped_not_a_crash():
+    r1, r2, s = _summary(False)
+    d = compile_view(spec(summaries=[s], selection={"entities": [X + "A", X + "C"], "expansion": {"hops": 0, "direction": "both"}}),
+                     scope(), model([entity("A"), entity("C")], [r1, r2]))       # B is gone, its records remain
+    assert iris(d) == [X + "A", X + "C"] and d.edges == ()
+
+
+def test_areas_and_notes_count_against_the_node_budget():
+    with pytest.raises(DisplayLimitExceeded) as e:
+        compile_view(spec(groups=[{"id": "g", "title": "G", "members": [X + "A"], "collapsed": False}],
+                          presentation={"maxNodes": 1}), scope(), model(CHAIN, CHAIN_RELS))
+    assert e.value.count == 2
+    d = compile_view(spec(annotations=[{"id": "n", "text": "t", "target": {"kind": "entity", "id": X + "A"}}],
+                          presentation={"maxNodes": 3}), scope(), model(CHAIN, CHAIN_RELS))
+    assert len(d.nodes) == 3                                        # A, B and the note; nothing over the limit

@@ -53,8 +53,8 @@ def baseline(diagram: DiagramModel, model: SourceModel, languages) -> dict:
     return {
         "entities": {i: {"label": choose_label(model.entities[i], languages), "status": model.entities[i].status}
                      for i in iris if i in model.entities},
-        "relationships": {r: {"status": by_id[r].status, "source": by_id[r].source, "target": by_id[r].target,
-                              "type": by_id[r].type} for r in rels if r in by_id},
+        "relationships": {r: {"status": by_id[r].status, "label": by_id[r].label, "source": by_id[r].source,
+                              "target": by_id[r].target, "type": by_id[r].type} for r in rels if r in by_id},
     }
 
 
@@ -73,6 +73,8 @@ def diff(saved: dict, now: dict, model: SourceModel, saved_fingerprints: dict, f
         "addedRelationships": sorted(set(nr) - set(sr)),
         "removedRelationships": sorted(r for r in set(sr) - set(nr) if r not in known_rels),
         "notShownRelationships": sorted(r for r in set(sr) - set(nr) if r in known_rels),
+        "changedRelationshipStatus": sorted(r for r in set(sr) & set(nr) if sr[r].get("status") != nr[r]["status"]),
+        "changedRelationshipLabels": sorted(r for r in set(sr) & set(nr) if sr[r].get("label") != nr[r]["label"]),
         "changedGraphs": sorted(g for g in set(saved_fingerprints) | set(fingerprints)
                                 if saved_fingerprints.get(g) != fingerprints.get(g)),
     }

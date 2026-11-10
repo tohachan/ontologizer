@@ -78,6 +78,26 @@ function EntityView({ e }: { e: EntityDetail }) {
       <h3>Labels</h3>
       <ul>{e.labels.map((l) => <li key={l.prop + l.value + l.language}>{l.value} <span className="tag">{l.prop}{l.language ? ` @${l.language}` : ''}</span></li>)}</ul>
       <EvidenceList items={e.evidence} />
+      {e.candidates && e.candidates.length > 0 && (
+        <>
+          <h3>Candidate mappings (no target yet)</h3>
+          <ul>{e.candidates.map((c) => (
+            <li key={c.id}>{short(c.type)} → <i>{c.candidateLabel}</i>{c.candidateLevel && <span className="tag">[{c.candidateLevel}]</span>} {statusText(c.status)}
+              <EvidenceList items={c.evidence} /></li>
+          ))}</ul>
+        </>
+      )}
+      {e.project && typeof e.project === 'object' && (
+        <>
+          <h3>Project</h3>
+          <div className="mono small">{e.project.iri}{e.project.repository ? ` · ${e.project.repository}` : ''}{e.project.commit ? `@${e.project.commit.slice(0, 8)}` : ''}</div>
+          {e.project.variation.length > 0 && (
+            <table className="statements" aria-label="variation"><tbody>
+              {e.project.variation.map((v) => <tr key={v.dimension + v.value}><td>{localName(v.dimension)}</td><td>{localName(v.value)} {statusText(v.status)}{v.note ? ` — ${v.note}` : ''}</td></tr>)}
+            </tbody></table>
+          )}
+        </>
+      )}
       <h3>Statements</h3>
       <table className="statements"><tbody>
         {e.statements.map((s, i) => <tr key={i}><td>{short(s.predicate)}</td><td><TermView t={s.object} /></td></tr>)}

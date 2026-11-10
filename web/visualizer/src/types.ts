@@ -54,6 +54,7 @@ export type Changes = {
   addedEntities: string[]; removedEntities: string[]; notShownEntities: string[]; changedLabels: string[];
   changedStatus: string[]; addedRelationships: string[]; removedRelationships: string[];
   notShownRelationships: string[]; changedGraphs: string[];
+  changedRelationshipStatus?: string[]; changedRelationshipLabels?: string[];
 };
 export type Layout = { positions: Record<string, { x: number; y: number }>; pinned: string[];
                        viewport: { x: number; y: number; zoom: number } | null; engine: string };
@@ -70,7 +71,11 @@ export type Term = { kind: 'iri' | 'blank' | 'literal'; value: string; datatype?
 export type EntityDetail = {
   iri: string; types: string[]; graphs: string[]; labels: Label[]; definitions: Label[]; level: string | null;
   upperCategory: string | null; status: string | null; evidence: Evidence[]; owlStructure: boolean;
-  project: unknown; statements: { graph: string; predicate: string; object: Term }[]; statementsOmitted: number;
+  project: null | string | { iri: string; repository: string | null; commit: string | null;
+    variation: { dimension: string; value: string; status: string | null; note: string | null; evidence: Evidence[] }[] };
+  candidates?: { id: string; type: string; status: string | null; candidateLabel: string | null; candidateLevel: string | null;
+                 evidence: Evidence[] }[];
+  statements: { graph: string; predicate: string; object: Term }[]; statementsOmitted: number;
 };
 export type RelationshipDetail = {
   id: string; kind: string; source: string; target: string | null; type: string; graph: string;

@@ -113,9 +113,9 @@ def _entry(cfg: Config, preset: Preset, path: str) -> GraphEntry | None:
 def resolve(cfg: Config, graphs: Sequence[GraphEntry], primary: Sequence[str], context: Sequence[str]) -> Scope:
     """Expand `primary` and `context` (graph paths or globs) against the catalog.
 
-    A pattern without `@` matches working graphs only, one with `@` releases only. A literal path of
-    a graph this config owns stays in the scope even when the store has no such graph now, so that a
-    saved view reports it missing instead of failing."""
+    A pattern without `@` matches working graphs only, one with `@` releases only. A literal path the
+    configuration has a policy for (for a primary graph: one this config owns) stays in the scope even
+    when the store has no such graph now, so that a saved view reports it missing instead of failing."""
     known = {g.path: g for g in graphs}
     owned = {p: g for p, g in known.items() if g.owner is not None and g.owner == cfg.project}
     prim = _expand(cfg, known, primary, "primary", glob_over=owned)
@@ -159,8 +159,8 @@ def _expand(cfg: Config, known: dict[str, GraphEntry], patterns: Sequence[str], 
         else:
             preset = preset or Preset.load(cfg.preset_path)
             entry = _entry(cfg, preset, pat)
-            if entry is None or entry.owner is None or entry.owner != cfg.project:
+            if entry is None or (what == "primary" and (entry.owner is None or entry.owner != cfg.project)):
                 raise OutOfScope(f"{what}: no graph {pat!r} in this configuration")
-            hits = [entry]                      # owned but absent from the store: reported missing by the reader
+            hits = [entry]                      # configured but absent from the store: reported missing by the reader
         out.update((g.path, g) for g in hits)
     return list(out.values())

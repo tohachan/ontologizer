@@ -380,3 +380,20 @@ def test_a_vanished_entity_is_marked_and_never_replaced(tmp_path):
     assert all(f"{D}Item" not in n["members"] for n in out["diagram"]["nodes"])
     strict = call(app, "POST", "compile", {"owner": "study", "spec": s})
     assert strict[0] == 422 and strict[1]["error"]["code"] == "invalid-spec"
+
+
+def test_the_inspector_gets_candidate_mappings_and_project_variation(tmp_path):
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    extra = TRIG.replace("<{G}upper/gufo>".replace("{G}", G), f"""<{G}upper/gufo>""") + f"""
+<{G}shared/domain> {{
+  <{D}m1> a ok:Mapping ; ok:mappingSource <{D}Order> ; ok:mappingKind ok:partial ; ok:candidateLabel "Ledger"@en .
+  <{D}P> a ok:Project . <{D}Order> ok:inProject <{D}P> .
+  <{D}ch> a ok:VariationChoice ; ok:choiceProject <{D}P> ; ok:choiceDimension <{D}Dim> ; ok:choiceValue <{D}Val> .
+}}"""
+    app = Visualizer(Owners(hub), ScopedReader(RowEngine(extra)), Settings(allowed_hosts=(HOST,)))
+    out = compile_(app)[1]
+    order = next(n for n in out["diagram"]["nodes"] if n["label"] == "Order")
+    (ent,) = call(app, "GET", f"compilations/{out['compileId']}/elements/{order['id']}")[1]["entities"]
+    assert [c["candidateLabel"] for c in ent["candidates"]] == ["Ledger"]
+    assert ent["project"]["variation"][0]["value"] == f"{D}Val"

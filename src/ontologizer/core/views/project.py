@@ -144,8 +144,8 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
         if any(a[1] != b[0] for a, b in zip(chain, chain[1:])):
             continue
         ends = (chain[0][0], chain[-1][1])
-        if not all(e in ents for e in ends):
-            continue
+        if not all(e in ents for pair in chain for e in pair):
+            continue                                            # an entity on the path is gone: tolerant mode reported it
         summaries.append((s, steps, chain, ends))
         mandatory |= set(ends)
     mandatory -= excluded
@@ -186,7 +186,7 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
     consumed = {r.id for _, steps, _, _ in summaries for r in steps}
     visible = set(hop)
     for s, steps, chain, ends in summaries:
-        visible |= {a for a, _ in chain[1:]}
+        visible |= {a for a, _ in chain[1:]} - excluded        # an exclusion wins over a summary too
     plain = [r for r in allowed if r.id not in consumed and r.source in visible and r.target in visible]
     hidden: set[str] = set()
     for s, steps, chain, ends in summaries:
@@ -200,8 +200,11 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
     # 5. display budget: mandatory first, then by hop, the kind that reached it, IRI
     collapsed = {g.id: g for g in spec.groups if g.collapsed}
     group_of = {m: g.id for g in spec.groups for m in g.members if m in visible}
+    # Every emitted node counts: an area container and an annotation take a place like a card.
+    areas = sum(1 for g in spec.groups if not g.collapsed and any(m in mandatory for m in g.members))
+    notes = sum(1 for a in spec.annotations if a.target_kind != "entity" or a.target_id in mandatory)
     def cost(iris_) -> int:
-        return len({group_of[i] if group_of.get(i) in collapsed else i for i in iris_})
+        return len({group_of[i] if group_of.get(i) in collapsed else i for i in iris_}) + areas + notes
     if cost(mandatory) > spec.max_nodes:
         raise DisplayLimitExceeded(cost(mandatory), spec.max_nodes)
     shown = set(mandatory)

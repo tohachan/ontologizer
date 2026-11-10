@@ -150,3 +150,12 @@ def test_a_worktree_without_its_own_registry_uses_the_main_checkouts(tmp_path):
     assert Owners(tmp_path / "wt").names() == ["study"]
     (tmp_path / "wt" / "ontologizer.local.yaml").write_text("projects: {own: ../own}\n")
     assert Owners(tmp_path / "wt").names() == ["own"]
+
+
+def test_a_configured_context_graph_gone_from_the_store_stays_in_scope(owners):
+    cfg = owners.config("study")
+    without = [i for i in STORE if not i.endswith(("upper/gufo", "projects/other"))]
+    s = resolve(cfg, catalog(cfg, without), primary=["projects/a"], context=["upper/gufo", "projects/other"])
+    assert [g.path for g in s.context] == ["projects/other", "upper/gufo"]
+    with pytest.raises(OutOfScope):
+        resolve(cfg, catalog(cfg, without), primary=["projects/other"], context=[])   # never a primary of another owner

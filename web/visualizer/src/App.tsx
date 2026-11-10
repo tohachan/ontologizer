@@ -6,13 +6,14 @@ import { Canvas } from './Canvas';
 import { Inspector } from './Inspector';
 import { Sidebar, type Selection } from './Sidebar';
 import * as ops from './ops';
-import { buildSpec, scopeKey } from './spec';
-import type { Artifact, Catalog, Compilation, Layout, OwnerCatalog, SavedView, SearchHit, ViewSpec } from './types';
+import { buildSpec, fromSpec, scopeKey } from './spec';
+import type { Artifact, Catalog, Compilation, Layout, OwnerCatalog, SavedView, SearchHit } from './types';
 import { download, slug, Views } from './Views';
 
 const START: Selection = {
   primary: [], context: [], languages: ['en', 'ru'], seeds: [], excluded: [], levels: [],
-  kinds: ['kit-relation', 'kit-mapping', 'class-inheritance'], hops: 1, direction: 'both',
+  kinds: ['kit-relation', 'kit-mapping', 'class-inheritance'], hops: 1, direction: 'both', types: [],
+  layout: { direction: 'RIGHT', maxNodes: 80, maxEdges: 160, preset: 'domain' },
 };
 
 function describe(e: unknown): string {
@@ -122,6 +123,11 @@ export function App() {
   }, [owner, opened]);
 
   const compile = useCallback(() => { void compileWith(sel, extra); }, [compileWith, sel, extra]);
+
+  // Refresh: the current view, edits and positions kept, against a fresh read of the source.
+  const refresh = useCallback(() => {
+    void compileWith(sel, extra, { mode: 'tolerant', fresh: true, compareTo: opened.revision !== null ? opened.id : undefined });
+  }, [compileWith, sel, extra, opened]);
 
   // Opening a saved view (or a JSON file) reads the source again and compiles in tolerant mode, so
   // references the data no longer has are reported, not fatal, and changes since it was saved show.
@@ -241,6 +247,7 @@ export function App() {
           {counts.hiddenByRule > 0 && ` · ${counts.hiddenByRule} filtered`}
           {(counts.omittedNodes > 0 || counts.omittedEdges > 0) && ` · ${counts.omittedNodes} nodes and ${counts.omittedEdges} edges over the display limit`}
         </span>}
+        {compilation && <button type="button" onClick={refresh} disabled={busy} title="read the source again; your edits and positions stay">Refresh</button>}
         {compilation && <SaveBar title={opened.title} isNew={opened.revision === null} busy={busy} onSave={save}
           onExport={() => owner && opened.revision !== null && api.view(owner, opened.id).then((a) => download(`${opened.id}.view.json`, a), (e) => setError(describe(e)))} />}
       </header>
@@ -262,7 +269,7 @@ export function App() {
           {compilation
             ? <ReactFlowProvider>
                 <Actions compilation={compilation} picked={picked} onAction={onAction} busy={busy} />
-                <Canvas key={canvasKey} compilation={compilation} picked={picked} onPick={onPick}
+                <Canvas key={canvasKey} compilation={compilation} picked={picked} onPick={onPick} direction={sel.layout.direction}
                         initialLayout={initialLayout} layoutRef={layoutRef} />
               </ReactFlowProvider>
             : <p className="muted placeholder">{owner ? 'Choose graphs and starting concepts, then show the diagram.' : 'Choose an owner.'}</p>}
@@ -295,6 +302,8 @@ function Changes({ c }: { c: NonNullable<Compilation['changes']> }) {
     c.changedStatus.length && `${c.changedStatus.length} with a new status`,
     c.addedRelationships.length && `${c.addedRelationships.length} new relationship(s)`,
     c.removedRelationships.length && `${c.removedRelationships.length} relationship(s) gone`,
+    c.changedRelationshipStatus?.length && `${c.changedRelationshipStatus.length} relationship(s) with a new status`,
+    c.changedRelationshipLabels?.length && `${c.changedRelationshipLabels.length} relationship(s) relabelled`,
   ].filter(Boolean);
   if (!parts.length && !c.changedGraphs.length) return <div role="status" className="notice">Unchanged since it was saved.</div>;
   return (
@@ -304,17 +313,6 @@ function Changes({ c }: { c: NonNullable<Compilation['changes']> }) {
       {c.removedEntities.length > 0 && ` Gone: ${c.removedEntities.map((i) => i.split(/[#/:]/).pop()).join(', ')} (not replaced).`}
     </div>
   );
-}
-
-function fromSpec(sp: ViewSpec, base: Selection): { s: Selection; x: ops.Extra } {
-  const known = new Map(base.seeds.map((x) => [x.iri, x.label]));
-  return {
-    s: { ...base, primary: sp.scope.primaryGraphs, context: sp.scope.contextGraphs, languages: sp.presentation.languages,
-         seeds: sp.selection.entities.map((iri) => ({ iri, label: known.get(iri) ?? iri.split(/[#/:]/).pop() ?? iri })),
-         excluded: sp.selection.excludedEntities, levels: sp.selection.levels, kinds: sp.selection.relationKinds,
-         hops: sp.selection.expansion.hops, direction: sp.selection.expansion.direction },
-    x: { groups: sp.groups, summaries: sp.summaries, annotations: sp.annotations },
-  };
 }
 
 function Ask({ onAsk, busy, candidates, onPick }: { onAsk: (q: string) => void; busy: boolean;

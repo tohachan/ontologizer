@@ -225,3 +225,16 @@ def test_the_server_loads_the_planner_only_when_configured(tmp_path, capsys):
     s = server.build(hub, "127.0.0.1", 0)
     assert s.app.planner is None and "it is off" in capsys.readouterr().err
     s.server_close()
+
+
+def test_a_proposal_that_cannot_be_shown_gets_the_repair(make):
+    class TooMany(Stub):
+        def plan(self, req):
+            self.seen.append(req)
+            spec = json.loads(json.dumps(req.current_spec))
+            spec["selection"]["entities"] = [e.iri for e in req.entities]
+            spec["presentation"]["maxNodes"] = 1 if len(self.seen) == 1 else 80
+            return PlanResult(CONTRACT_VERSION, spec, "")
+    stub = TooMany()
+    st, out = post(make(stub), "plan", {"owner": "study", "request": "всё", "spec": current()})
+    assert st == 200 and out["repaired"] is True and any("limit" in e for e in stub.seen[1].errors)

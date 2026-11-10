@@ -118,3 +118,17 @@ describe('failures', () => {
     expect(screen.getByText(/Choose graphs and starting concepts/)).toBeTruthy();
   });
 });
+
+it('the inspector shows candidate mappings and the project\'s variation', async () => {
+  routes = { ...routes };
+  const detail = JSON.parse(JSON.stringify(orderDetail));
+  detail.entities[0].candidates = [{ id: 'r-c', type: 'urn:ontologizer:kit:partial', status: 'hypothesis', candidateLabel: 'Ledger', candidateLevel: 'domain', evidence: [] }];
+  detail.entities[0].project = { iri: 'urn:sample:P', repository: 'repo', commit: null,
+    variation: [{ dimension: 'urn:sample:Storage', value: 'urn:sample:SQL', status: 'asserted', note: 'postgres', evidence: [] }] };
+  routes['GET /compilations/c1/elements/entity:order'] = () => ({ body: detail });
+  await toDiagram();
+  fireEvent.click(within(screen.getByLabelText('concept Order')).getByText('Order'));
+  const inspector = await screen.findByLabelText('inspector');
+  await within(inspector).findByText('Ledger');
+  expect(within(inspector).getByLabelText('variation').textContent).toContain('SQL');
+});

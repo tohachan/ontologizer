@@ -34,3 +34,28 @@ def test_views_outside_the_owner_root_are_refused(tmp_path):
     assert any("outside" in n for n in notes)
     assert yaml.safe_load((tmp_path / "out" / "ontologizer.local.yaml").read_text())["projects"] == {}
     assert not (tmp_path / "elsewhere").exists()
+
+
+def test_the_planner_and_its_key_reach_the_container_without_the_key_in_any_file(tmp_path, monkeypatch):
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    (hub / "ontologizer.local.yaml").write_text(yaml.safe_dump({"projects": {"study": "../study"}, "visualizer": {
+        "planner": {"adapter": "chat", "model": "m", "env": "MY_KEY"}}}))
+    (hub / ".env").write_text("MY_KEY=sk-not-in-files\n")
+    out = tmp_path / "out"
+    generate(hub, out, "http://engine:8080")
+    reg = yaml.safe_load((out / "ontologizer.local.yaml").read_text())
+    assert reg["visualizer"] == {"planner": {"adapter": "chat", "model": "m", "env": "MY_KEY"}}
+    svc = yaml.safe_load((out / "compose.mounts.yaml").read_text())["services"]["visualizer"]
+    assert svc["environment"] == ["MY_KEY"]
+    assert f"{(hub / '.env').resolve()}:/app/.env:ro" in svc["volumes"]
+    for f in out.iterdir():
+        assert "sk-not-in-files" not in f.read_text()
+
+
+def test_without_a_planner_no_key_is_passed(tmp_path):
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    generate(hub, tmp_path / "out", "http://engine:8080")
+    svc = yaml.safe_load((tmp_path / "out" / "compose.mounts.yaml").read_text())["services"]["visualizer"]
+    assert "environment" not in svc and not any(v.endswith("/app/.env:ro") for v in svc["volumes"])

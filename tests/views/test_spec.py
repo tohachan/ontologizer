@@ -191,3 +191,15 @@ def test_annotation_targets_entities_groups_and_summaries(env):
 def test_parse_round_trips_to_the_same_json():
     s = base()
     assert parse(s).to_json() == s
+
+
+def test_a_summary_through_a_vanished_entity_is_reported(env, tmp_path):
+    cfg, cat, m, rel = env
+    from dataclasses import replace
+    gone = replace(m, entities={k: v for k, v in m.entities.items() if not k.endswith(":B")})
+    s = base()
+    s["summaries"] = [{"id": "p", "hideIntermediateEntities": False, "steps": [
+        {"relationshipId": rel["r1"], "direction": "forward"}, {"relationshipId": rel["r2"], "direction": "forward"}]}]
+    with pytest.raises(SpecError, match="passes through"):
+        check(parse(s), cfg, cat, gone)
+    assert [d.code for d in check(parse(s), cfg, cat, gone, mode="tolerant").diagnostics] == ["unknown-entity"]

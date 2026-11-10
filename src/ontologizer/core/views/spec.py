@@ -226,6 +226,11 @@ def _references(spec: ViewSpec, model: SourceModel) -> list[Issue]:
         if ends and any(a[1] != b[0] for a, b in zip(ends, ends[1:])):
             issues.append(Issue("discontiguous-summary", "the steps are not contiguous in the stated directions",
                                 f"summaries[{si}].steps"))
+        elif ends:
+            missing = sorted({e for pair in ends for e in pair if e is None or e not in known}, key=str)
+            if missing:
+                issues.append(Issue("unknown-entity", f"the path passes through {missing[0]}, which is not in the scope",
+                                    f"summaries[{si}].steps"))
     targets = {"entity": set(known), "group": {g.id for g in spec.groups}, "summary": {s.id for s in spec.summaries}}
     for ai, a in enumerate(spec.annotations):
         if a.target_id not in targets[a.target_kind]:

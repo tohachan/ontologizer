@@ -105,3 +105,39 @@ it('opens a JSON file as an unsaved view', async () => {
   expect(sent.mode).toBe('tolerant');
   expect(sent.compareTo).toBeUndefined();
 });
+
+it('keeps every field of a saved spec through opening and saving', async () => {
+  await diagram();
+  const spec = {
+    schemaVersion: 1 as const, id: 'odd', title: 'Odd one', scope: { primaryGraphs: ['shared/domain'], contextGraphs: ['upper/gufo'] },
+    selection: { entities: ['urn:sample:Order'], excludedEntities: ['urn:sample:X'], levels: ['domain'], relationKinds: ['kit-mapping' as const],
+                 relationTypeIris: ['urn:ontologizer:kit:partial'], expansion: { hops: 3, direction: 'reverse' as const } },
+    groups: [{ id: 'area1', title: 'A', members: ['urn:sample:Order'], collapsed: true }],
+    summaries: [{ id: 'path1', steps: [{ relationshipId: 'r-' + '1'.repeat(20), direction: 'reverse' as const }, { relationshipId: 'r-' + '2'.repeat(20), direction: 'forward' as const }], hideIntermediateEntities: false, label: 'via' }],
+    annotations: [{ id: 'note1', text: 'n', target: { kind: 'group' as const, id: 'area1' } }],
+    presentation: { languages: ['ru', 'en'], direction: 'DOWN' as const, maxNodes: 200, maxEdges: 400, preset: 'custom' },
+  };
+  stored = { artifactVersion: 1, revision: 1, spec, layout: { positions: {}, pinned: [], viewport: null, engine: '' }, manifest: compilation('x').manifest, baseline: {} };
+  revision = 1;
+  fireEvent.change(screen.getByLabelText('owner'), { target: { value: 'study' } });
+  fireEvent.click(await within(await screen.findByLabelText('saved views')).findByText('Odd one'));
+  await screen.findByText(/Odd one \(rev 1\)/);
+  expect(reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec).toEqual(spec);
+  fireEvent.click(screen.getByText('Save changes'));
+  await screen.findByText(/revision 2/);
+  expect(reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec).toEqual(spec);
+});
+
+it('refresh reads the source again and keeps the view, its edits and its canvas', async () => {
+  await diagram();
+  const before = reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec;
+  const nodeEl = document.querySelector('.react-flow__node[data-id="entity:order"]');
+  fireEvent.click(screen.getByText('Refresh'));
+  await waitFor(() => expect(reqs.filter((r) => r.path === '/compile').length).toBe(2));
+  const sent = reqs.filter((r) => r.path === '/compile').at(-1)!.body!;
+  expect(sent).toMatchObject({ mode: 'tolerant' });
+  expect(sent.snapshotId).toBeUndefined();
+  expect(sent.spec).toEqual(before);
+  await screen.findByLabelText('concept Order');
+  expect(document.querySelector('.react-flow__node[data-id="entity:order"]')).toBe(nodeEl);   // the canvas was not remounted
+});

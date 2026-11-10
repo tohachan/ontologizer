@@ -13,6 +13,7 @@ from dataclasses import replace
 
 from ontologizer.core.config import Config
 from ontologizer.core.views.models import SourceModel
+from ontologizer.core.views.project import DisplayLimitExceeded, compile_view
 from ontologizer.core.views.scope import GraphEntry, Scope
 from ontologizer.core.views.spec import SpecError, check, parse
 from ontologizer.ports.view_planner import (CONTRACT_VERSION, CatalogEntity, CatalogRelationship, PlannerError,
@@ -84,7 +85,10 @@ def _issues(proposal, current: dict, cfg, graphs, model) -> list[dict]:
     if fixed:
         return [{"code": "out-of-scope", "path": k, "message": "the planner may not change this"} for k in fixed]
     try:
-        check(parse(proposal), cfg, graphs, model, mode="strict")
+        checked = check(parse(proposal), cfg, graphs, model, mode="strict")
+        compile_view(checked.spec, checked.scope, model)       # a proposal that cannot be shown is not valid
     except SpecError as e:
         return [{"code": i.code, "path": i.path, "message": i.message} for i in e.issues]
+    except DisplayLimitExceeded as e:
+        return [{"code": "display-limit", "path": "presentation.maxNodes", "message": str(e)}]
     return []
