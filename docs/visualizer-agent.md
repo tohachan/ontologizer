@@ -124,6 +124,41 @@ Each tool's result is a `content` list with one `text` item holding JSON. Result
 
 `summary` is one line saying what changed, and it is shown in the chat.
 
+**Details** (`src/ontologizer/adapters/visualization/view_tools.py`, tests `tests/views/test_view_tools.py`):
+
+- Protocol. `tools/call` checks the arguments against the tool's `inputSchema` (unknown tool or bad
+  arguments: JSON-RPC `-32602`; unknown method `-32601`; a body that is not JSON `-32700`, a batch `-32600`).
+  A spec's own content is checked by the compiler, not at the protocol level, so its issues come back as a
+  tool result the agent can read. `tools/list` publishes the full ViewSpec schema as the `spec` input. A
+  notification or a client response gets 202 with no body. The endpoint answers POST only; the bridge
+  answers any other method with 405.
+- Failures. Every failure is `isError: true` with `{"ok": false, "error", "message"}`, plus `issues`
+  (`[{code, message, path}]`) for `invalid-spec` and `out-of-scope`, and `count` and `limit` for
+  `display-limit`. The other codes are the HTTP API's (`engine-unavailable`, `unknown-owner`, …), plus
+  `no-current-view` (the page sent no view), `unknown-entity` (`describe_concept`) and `nothing-to-undo`.
+- Scope of `search_concepts` and `describe_concept`. The current view's scope by default. With `graphs`,
+  the owner's own graphs among them are primary and the others context; with none of its own, the current
+  primary graphs stay primary. `search_concepts` keeps only hits in the named graphs. A hit also carries
+  `context`: the entity is in context graphs only. `describe_concept` gives each link's relationship
+  `id` (for summaries) and `outgoingTotal`, `incomingTotal`.
+- `category`. On a node of `get_current_view`, the canvas's own value: the node's markers named by the
+  first gUFO class in the canvas's display order (`CATEGORY_ORDER` in `web/visualizer/src/lanes.ts`, ported
+  and tested for equality), an area its members' shared value, else `mixed`; no marker is `other`. For
+  `search_concepts` and `describe_concept`, as a card shows it with `class-inheritance` selected.
+- `get_current_view` uses the page's compilation when the service still holds it for the same spec,
+  else compiles the spec tolerantly (it is what the page shows). A node lists at most 50 member IRIs and
+  carries `memberCount`; `edgesOmitted` counts edges past 400. `get_catalog` gives `presets: ["domain"]`,
+  the values of `presentation.preset`.
+- `preview_view` and `apply_view` compile on the current view's snapshot when its graphs are the same, else
+  read a new one. `apply_view` answers `{ok, counts, viewEventId}`; `undo_view` `{ok, viewEventId,
+  undoOf}`. Undo's `data-view` carries the restored spec, the summary `Undo: <summary>`, and in `undoOf`
+  the id of the event it undoes. The undo history is the agent's applies in this session; the page's own
+  edits between turns replace `current` but not the history.
+- The session (`ViewSession`): `owner`, `id`, `secret` (`secrets.token_urlsafe(32)`, compared in constant
+  time, never in `repr`), `current`, `history`, and `events`, a `queue.Queue` of `data-view` payloads that
+  the bridge drains into the stream. The bridge calls `set_current(view)` with the request's `view` before a
+  turn. The system prompt for the harness is `adapters/visualization/agent_instructions.md`.
+
 **`data-view` chunk.**
 
 ```json

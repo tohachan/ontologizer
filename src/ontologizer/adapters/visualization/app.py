@@ -434,6 +434,16 @@ class Visualizer:
             "changes": changes,
         }
 
+    # ---- view tools (ONTO-44) --------------------------------------------------------
+    # Used by view_tools.py, not an HTTP route.
+    def source(self, owner, primary, context, snapshot_id=None):
+        """The configuration, scope, snapshot and source model of these graphs, read and cached as the routes
+        read them: `(cfg, scope, snapshot, model)`. Raises ApiError like the routes."""
+        cfg = self._config(owner)
+        scope = self._scope(cfg, primary, context)
+        snap, model = self._snapshot(scope, snapshot_id)
+        return cfg, scope, snap, model
+
     # ---- planning -------------------------------------------------------------------
     def plan(self, body: dict) -> dict:
         if self.planner is None:
