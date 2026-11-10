@@ -34,7 +34,10 @@ Answer with exactly one JSON object and nothing else:
 Rules: keep schemaVersion, id, title and scope exactly as in the current specification. Use only IRIs
 and relationship IDs from the catalog. Match the request to concepts by meaning: labels may be in
 another language than the request. Do not invent relationships; a summary is a path of 2 to 6
-relationship IDs that connect in the stated directions. Hops are 0 to 3. Annotations are plain text."""
+relationship IDs that connect in the stated directions. Hops are 0 to 3. Annotations are plain text.
+presentation.arrangement, optional, groups the cards on the canvas, outer key first: lanes by the first
+key, boxes inside a lane by the second, from "level", "graph", "category" (the gUFO category) and
+"group"; [] means no grouping, and leaving it out keeps level lanes."""
 
 
 class ChatPlanner:

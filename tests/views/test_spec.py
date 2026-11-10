@@ -193,6 +193,33 @@ def test_parse_round_trips_to_the_same_json():
     assert parse(s).to_json() == s
 
 
+@pytest.mark.parametrize("arrangement", [[], ["level"], ["level", "graph"], ["category", "level"], ["group", "category"]])
+def test_an_arrangement_is_accepted_and_echoed(env, arrangement):
+    s = base()
+    s["presentation"]["arrangement"] = arrangement
+    spec = parse(s)
+    assert spec.arrangement == tuple(arrangement)
+    assert spec.to_json() == s
+    assert run(env, s).spec.arrangement == tuple(arrangement)
+
+
+def test_a_spec_without_an_arrangement_echoes_none_and_keeps_its_json():
+    spec = parse(base())
+    assert spec.arrangement is None
+    assert "arrangement" not in spec.to_json()["presentation"]      # the spec digest of an old view is unchanged
+
+
+@pytest.mark.parametrize("arrangement", [["colour"], ["level", "level"], ["level", "graph", "category"], "level", [1]],
+                         ids=["unknown-key", "repeated", "three-keys", "not-a-list", "not-a-string"])
+def test_a_bad_arrangement_is_rejected(arrangement):
+    s = base()
+    s["presentation"]["arrangement"] = arrangement
+    with pytest.raises(SpecError) as e:
+        parse(s)
+    assert e.value.issues and all(i.code == "schema" and i.path.startswith("presentation.arrangement")
+                                  for i in e.value.issues)
+
+
 def test_a_summary_through_a_vanished_entity_is_reported(env, tmp_path):
     cfg, cat, m, rel = env
     from dataclasses import replace

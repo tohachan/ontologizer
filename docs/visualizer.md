@@ -211,7 +211,9 @@ Required sections are:
 | `groups` | Stable IDs, titles, member IRIs, collapsed state |
 | `summaries` | Explicit ordered relationship paths and optional display labels |
 | `annotations` | Text notes attached to elements; no ontology meaning |
-| `presentation` | Language preferences, orientation, visible limits, appearance preset |
+| `presentation` | Language preferences, orientation, visible limits, appearance preset, and optionally the arrangement of the cards (`arrangement`, below) |
+
+`presentation.arrangement` is optional: an ordered list of at most two grouping keys, outer first, from `level`, `graph`, `category` (the card's gUFO category) and `group` (the spec's own groups). The first key gives the canvas lanes, the second a labelled box per value inside each lane (React Flow and ELK integration, Arrangement). Without the field a view is arranged as before arrangements existed: level lanes, with a box per graph in a lane holding several. An empty list means no grouping: one layered layout. The arrangement is a layout matter: the compiler validates it and echoes it, and the diagram is the same whatever it says. A spec without the field serializes without it, so the digest of a spec saved before it existed is unchanged.
 
 In version 1, each entity can belong to at most one group. Grouping by level or another property is a builder operation that expands to explicit memberships. This keeps the saved result reviewable and prevents new entities from appearing in a group unexpectedly on refresh.
 
@@ -255,7 +257,8 @@ Example, using synthetic identifiers only:
     "direction": "RIGHT",
     "maxNodes": 80,
     "maxEdges": 160,
-    "preset": "domain"
+    "preset": "domain",
+    "arrangement": ["level", "category"]
   }
 }
 ```
@@ -385,13 +388,21 @@ A recompile that brings many new cards (at least 8, and at least 30% of the card
 
 The first layout of a diagram waits until React Flow has measured every card of that diagram, not only the cards of the one before. The view is fitted once the laid-out positions are drawn. A deliberate full layout may reposition unpinned nodes. For version 1, a full automatic layout is available only when no nodes are pinned. If pins exist, offer to preserve the current positions or explicitly unlock them before full layout. Local placement of new nodes may leave overlaps to resolve manually. Do not assume arbitrary pin constraints are automatically respected by ELK.
 
-**Lanes by level** (on by default, a switch on the canvas):
+**Arrangement** (`presentation.arrangement`; the "Group by" choice on the canvas, saved with the view):
 
-- Each abstraction level is laid out by itself as a lane. Lanes follow the preset's order (top, domain, task, application), then the other levels, then concepts without a level.
-- Lanes run across the flow: with edges running right or left they are rows from the top, with edges running down or up they are columns from the left. A group goes in the lane of its members' shared level.
-- Inside a lane, ELK lays out each compound separately (`SEPARATE_CHILDREN`, minimum-width layering), so unconnected parts sit side by side instead of in one tall column. In a lane holding concepts of more than one graph, each graph's concepts sit in a labelled box.
+- The first key gives the lanes, each laid out by itself. Lanes run across the flow: with edges running right or left they are rows from the top, with edges running down or up they are columns from the left.
+- The second key, when there is one, gives a labelled box per value inside every lane, even a lane with one value. The exception is `graph` as the second key: as before arrangements existed, a graph box appears only in a lane holding concepts of more than one graph, around those concepts.
+- The keys of a card:
+  - `level`: its abstraction level, in the preset's order (top, domain, task, application), then the other levels, then "no level".
+  - `graph`: the graph that holds it, by path; "mixed", then "no graph", last.
+  - `category`: its gUFO category, labelled by local name (`Kind`). Of a card's markers the type-level class names it, not the individual-level one: (FunctionalComplex, Kind) is a Kind, (Event, EventType) an EventType. What the instances are comes before the plain Kind, as OntoUML's «relator» replaces «kind»: (Kind, Relator) is a Relator, and so are Mode, Quality, Collection and Quantity. A card with only individual-level markers takes one of those, and a marker outside gUFO its local name. Categories follow one another as endurant sortals (Kind, SubKind, Collection, Quantity, Role, Phase), non-sortals (Category, Mixin, RoleMixin, PhaseMixin), relators, modes and qualities, events and situations (EventType, SituationType), abstract types (AbstractIndividualType), the generic meta-types, the individual-level classes, then "mixed", then "no category".
+  - `group`: the spec's group the card stands for (an area or an aggregate), in the spec's order, then "in no group".
+- An area takes its members' shared value, else "mixed". An aggregate takes the level the compiler gives it, else "no level", and "mixed" for graph and category, which the compiler does not give for a group.
+- Inside a lane, ELK lays out each compound separately (`SEPARATE_CHILDREN`, minimum-width layering), so unconnected parts sit side by side instead of in one tall column. Boxes of a key other than `graph` are packed in their key's order (`considerModelOrder.components`), row by row: all Kind cards, then the Role cards, and so on.
 - ELK routes only edges inside one compound. An edge between boxes is drawn between its cards. An edge between lanes, such as a mapping, is a straight line from the top or bottom of its card toward the other lane. Mappings have their own colour as well as their dashes.
-- Bands are drawn from where the cards are, so they follow a drag. A saved layout records whether it used lanes (`elkjs-0.12.0/layered+lanes`) and opens the same way.
+- Bands are drawn from where the cards are, so they follow a drag. Their accessible names say the key: `level domain`, `category Kind`.
+- A saved layout records the arrangement it was laid out with in its engine string: `elkjs-0.12.0/layered` for none, `elkjs-0.12.0/layered+lanes` for the default, `elkjs-0.12.0/layered+lanes:level>category` for another. The spec's arrangement wins. A spec without one opens as its layout's engine string says, so a view saved before arrangements existed opens with or without lanes as it was saved; without either, it opens with the default.
+- Changing Group by lays the view out again, asking first when cards are pinned, and needs no compile.
 
 **Picking and navigating.**
 
@@ -522,6 +533,7 @@ Required acceptance cases:
 | A stale ELK worker response arrives | It cannot replace the newer diagram |
 | A planner returns unknown IRIs or invalid paths | Validation rejects the proposal |
 | The user moves or removes a visual element | No ontology write request occurs |
+| A view is arranged by category and saved | The spec carries the arrangement and reopens with it; a view saved without one opens with or without lanes as its layout says |
 
 ### Where each case is tested
 
@@ -556,6 +568,7 @@ Paths are under `tests/views/` unless named otherwise; browser tests are in `web
 | The engine token | `test_api.py::test_engine_failures_are_errors_and_leak_nothing`; image layers, history and config checked by hand (`make viz-up`, commit message of the container) |
 | The visualizer starts while the engine runs | not automated: the owner's check on the host (`deps/visualizer/README.md`) |
 | The planner is off | `test_planner.py::test_without_a_planner_the_service_and_manual_flow_work`; browser `planner.test.tsx`, `scenario.test.tsx` |
+| The arrangement (accepted, rejected, echoed; Group by saved and reopened; old views) | `test_spec.py::test_an_arrangement_is_accepted_and_echoed`, `test_a_bad_arrangement_is_rejected`, `test_a_spec_without_an_arrangement_echoes_none_and_keeps_its_json`; browser `lanes.test.tsx` (categories, order, two keys), `views.test.tsx`, `planner.test.tsx` |
 
 ### Measurements
 

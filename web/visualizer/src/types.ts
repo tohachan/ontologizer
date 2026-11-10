@@ -23,8 +23,10 @@ export type ViewSpec = {
                hideIntermediateEntities: boolean }[];
   annotations: { id: string; text: string; target: { kind: 'entity' | 'group' | 'summary'; id: string } }[];
   presentation: { languages: string[]; direction: 'RIGHT' | 'LEFT' | 'DOWN' | 'UP'; maxNodes: number;
-                  maxEdges: number; preset: string };
+                  maxEdges: number; preset: string;
+                  arrangement?: ArrangeKey[] };          // canvas grouping, outer first; absent: level lanes
 };
+export type ArrangeKey = 'level' | 'graph' | 'category' | 'group';
 
 export type DNode = {
   id: string; kind: 'concept' | 'area' | 'aggregate' | 'annotation'; origin: 'source' | 'aggregate' | 'annotation';

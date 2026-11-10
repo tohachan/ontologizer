@@ -21,10 +21,11 @@ export const inPort = (id: string) => `${id}::in`;
 export const outPort = (id: string) => `${id}::out`;
 
 // `only`: the top-level nodes to lay out (a lane), the rest left out with their edges. `boxes`: a key per
-// top-level node; nodes sharing one sit together in a compound `box:<key>` (a lane's graphs).
+// top-level node; nodes sharing one sit together in a compound `box:<key>` (a lane's graphs). `inOrder`: the
+// lane's parts are packed in the order given (the boxes of an arrangement's second key), not by size.
 export function toElk(nodes: DNode[], edges: DEdge[], sizes: Map<string, Size>,
                       direction: ViewSpec['presentation']['direction'] = 'RIGHT',
-                      opts: { only?: Set<string>; boxes?: Map<string, string>; id?: string } = {}): ElkNode {
+                      opts: { only?: Set<string>; boxes?: Map<string, string>; id?: string; inOrder?: boolean } = {}): ElkNode {
   const [inSide, outSide] = SIDES[direction];
   const card = (n: DNode): ElkNode => {
     const s = sizes.get(n.id) ?? CARD;
@@ -88,6 +89,7 @@ export function toElk(nodes: DNode[], edges: DEdge[], sizes: Map<string, Size>,
       'elk.algorithm': 'layered', 'elk.direction': direction,
       'elk.hierarchyHandling': lane ? 'SEPARATE_CHILDREN' : 'INCLUDE_CHILDREN',
       ...(lane ? { 'elk.layered.layering.strategy': 'MIN_WIDTH', 'elk.aspectRatio': '1.6' } : {}),
+      ...(lane && opts.inOrder ? { 'elk.layered.considerModelOrder.components': 'MODEL_ORDER' } : {}),
       'elk.edgeRouting': 'ORTHOGONAL', 'elk.layered.spacing.nodeNodeBetweenLayers': '80',
       'elk.spacing.nodeNode': '32', 'elk.json.edgeCoords': 'ROOT', 'elk.json.shapeCoords': 'PARENT',
     },

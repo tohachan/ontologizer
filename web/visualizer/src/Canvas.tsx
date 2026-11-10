@@ -5,7 +5,7 @@ import {
 import type { ElkPoint } from 'elkjs/lib/elk-api';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fromElk, toElk, type Box, type LayoutResult, type Size } from './elkGraph';
-import { bands, laneGraphs, laneHandles, lanesOf, stackLanes } from './lanes';
+import { arrange, arrangementOfEngine, bands, DEFAULT_ARRANGEMENT, engineFor, laneGraphs, laneHandles, stackLanes } from './lanes';
 import { edgeTypes } from './edges';
 import { edgeText } from './format';
 import { focusOf, reconcile, sameEdge, sameNode } from './focus';
@@ -13,7 +13,7 @@ import { CARD, place } from './layout';
 import { cardsOf, carryOver } from './placement';
 import { defaultEngine, LayoutRunner } from './layoutRunner';
 import { nodeTypes } from './nodes';
-import type { Compilation, DNode, Layout, ViewSpec } from './types';
+import type { ArrangeKey, Compilation, DNode, Layout, ViewSpec } from './types';
 
 import type { Pos } from './placement';
 type Props = {
@@ -22,11 +22,26 @@ type Props = {
   engine?: ConstructorParameters<typeof LayoutRunner>[0];
   initialLayout?: Layout | null;                         // a saved view's positions, applied once
   layoutRef?: { current: (() => Layout) | null };       // how the app reads the layout to save it
-  defaultLanes?: boolean;                                // one lane per level (lanes.ts) unless a saved layout says
+  arrangement?: ArrangeKey[];                            // the spec's grouping (lanes.ts); absent: the saved layout's
+  onArrangement?: (a: ArrangeKey[]) => void;            // Group by was changed: the app writes it into the spec
+  defaultLanes?: boolean;                                // without either, level lanes (else no grouping)
   levelOrder?: string[];                                 // the preset's levels, top first
 };
-export const ENGINE = 'elkjs-0.12.0/layered';
-export const LANES_ENGINE = `${ENGINE}+lanes`;
+export { ENGINE, LANES_ENGINE } from './lanes';
+// The Group by choices: the arrangement each writes into the spec.
+export const GROUP_BY: { label: string; value: ArrangeKey[] }[] = [
+  { label: 'Level', value: ['level'] },
+  { label: 'Level → category', value: ['level', 'category'] },
+  { label: 'Level → graph', value: DEFAULT_ARRANGEMENT },
+  { label: 'Level → group', value: ['level', 'group'] },
+  { label: 'Category', value: ['category'] },
+  { label: 'Category → level', value: ['category', 'level'] },
+  { label: 'Graph', value: ['graph'] },
+  { label: 'Graph → category', value: ['graph', 'category'] },
+  { label: 'Group', value: ['group'] },
+  { label: 'None', value: [] },
+];
+const keyOf = (a: ArrangeKey[]) => a.join('>');
 const AREA_PAD = { top: 40, side: 16, bottom: 16 };
 const NO_LEVELS: string[] = [];
 const MAPPING_COLOR = '#c2410c';               // a mapping crosses levels: drawn apart from relations (styles.css)
@@ -46,8 +61,13 @@ function storedWheel(): 'pan' | 'zoom' {
 }
 
 export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engine = defaultEngine, initialLayout, layoutRef,
-                        defaultLanes = false, levelOrder = NO_LEVELS }: Props) {
-  const [lanes, setLanes] = useState(initialLayout?.engine ? initialLayout.engine === LANES_ENGINE : defaultLanes);
+                        arrangement, onArrangement, defaultLanes = false, levelOrder = NO_LEVELS }: Props) {
+  // the spec's arrangement wins; a spec without one opens as its saved layout was made, else as the default
+  const [chosen, setChosen] = useState<ArrangeKey[]>(() => arrangementOfEngine(initialLayout?.engine)
+    ?? (defaultLanes ? DEFAULT_ARRANGEMENT : []));
+  const groupBy = keyOf(arrangement ?? chosen);              // a string, so an equal list is no new layout
+  const keys = useMemo(() => (groupBy ? groupBy.split('>') as ArrangeKey[] : []), [groupBy]);
+  const setGroupBy = (a: ArrangeKey[]) => { setChosen(a); onArrangement?.(a); };
   const flow = useReactFlow();
   const measured = useNodesInitialized();
   const positions = useRef(new Map<string, Pos>(Object.entries(initialLayout?.positions ?? {})));   // by visual ID, relative to the parent area
@@ -66,6 +86,7 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
   const fitAt = useRef<number | null>(null);               // fit the view once the nodes of this layout version are drawn
   const nodesFrom = useRef(0);                             // the layout version the nodes state was last built from
   const d = compilation.diagram;
+  const arranged = useMemo(() => arrange(d.nodes, keys, levelOrder), [d, keys, levelOrder]);
 
   // A new compilation keeps the cards it shares with the last one where they were and places the
   // others next to a neighbour; only the first diagram gets a full layout by itself.
@@ -97,8 +118,8 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
     sizes.current = measuredSizes;
     try {
       let result: LayoutResult;
-      if (lanes) {
-        const { lanes: ls, graphs } = laneGraphs(d.nodes, d.edges, measuredSizes, direction, levelOrder);
+      if (arranged) {
+        const { lanes: ls, graphs } = laneGraphs(d.nodes, d.edges, measuredSizes, direction, levelOrder, keys, arranged);
         const out = await runner.current.runAll(graphs);
         if (!out) return;                                 // a newer request owns the canvas
         result = stackLanes(ls, out, direction);
@@ -116,7 +137,7 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
     } catch {
       setStatus('failed');                                // the cards stay where they are
     }
-  }, [d, direction, flow, lanes, levelOrder]);
+  }, [d, direction, flow, arranged, keys, levelOrder]);
 
   useEffect(() => { setStatus('idle'); setConfirm(askLayout.current); }, [d]);
 
@@ -127,10 +148,10 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
       positions: Object.fromEntries([...positions.current, ...flow.getNodes().map((n) => [n.id, { x: n.position.x, y: n.position.y }] as const)]
         .filter(([id]) => !id.startsWith('note:') && !id.startsWith('lane:') && !id.startsWith('box:'))),
       pinned: [...pinned.current].filter((id) => positions.current.has(id)).sort(),
-      viewport: flow.getViewport ? flow.getViewport() : null, engine: lanes ? LANES_ENGINE : ENGINE,
+      viewport: flow.getViewport ? flow.getViewport() : null, engine: engineFor(keys),
     });
     return () => { layoutRef.current = null; };
-  }, [layoutRef, flow, lanes]);
+  }, [layoutRef, flow, keys]);
 
   useEffect(() => {
     if (initialLayout?.viewport && flow.setViewport) requestAnimationFrame(() => flow.setViewport(initialLayout.viewport!));
@@ -143,7 +164,7 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
     const kids = new Map<string, DNode[]>();
     for (const n of d.nodes) if (n.parent) kids.set(n.parent, [...(kids.get(n.parent) ?? []), n]);
     const byId = new Map(d.nodes.map((m) => [m.id, m]));
-    const ports = lanes ? (direction === 'RIGHT' || direction === 'LEFT' ? 'rows' : 'columns') : 'none';
+    const ports = arranged ? (direction === 'RIGHT' || direction === 'LEFT' ? 'rows' : 'columns') : 'none';
     const abs = (id: string): Pos => {
       const n = byId.get(id);
       if (!n) return { x: 0, y: 0 };
@@ -169,7 +190,7 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
         ...(n.parent ? { parentId: n.parent, extent: 'parent' as const } : {}),
       };
     });
-    if (!lanes) return out;
+    if (!arranged) return out;
     // the bands go first, so the cards are drawn over them
     const boxes = new Map<string, Box>();
     for (const n of out) {
@@ -178,14 +199,14 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
                                       : sizes.current.get(n.id) ?? CARD;
       boxes.set(n.id, { ...n.position, ...size });
     }
-    const decor: Node[] = bands(d.nodes, lanesOf(d.nodes, levelOrder), (id) => boxes.get(id)).map((b) => ({
-      id: b.id, type: 'band', position: { x: b.box.x, y: b.box.y }, data: { label: b.label, kind: b.kind },
+    const decor: Node[] = bands(d.nodes, arranged, (id) => boxes.get(id)).map((b) => ({
+      id: b.id, type: 'band', position: { x: b.box.x, y: b.box.y }, data: { label: b.label, kind: b.kind, key: b.key },
       style: { width: b.box.width, height: b.box.height }, draggable: false, selectable: false, focusable: false,
       zIndex: b.kind === 'lane' ? -2 : -1,
     }));
     return [...decor, ...out];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, version, lanes, levelOrder, direction]);
+  }, [d, version, arranged, direction]);
 
   // A pick changes only the nodes it selects or lights; the others keep their objects (focus.ts).
   const focus = useMemo(() => focusOf(picked, d), [picked, d]);
@@ -218,8 +239,8 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
   const edges = useMemo((): Edge[] => {
     // with lanes as rows, an edge between two lanes leaves its card at the top or bottom, toward the other lane
     const laneOf = new Map<string, number>();
-    if (lanes) {
-      lanesOf(d.nodes, levelOrder).forEach((l, i) => l.members.forEach((id) => laneOf.set(id, i)));
+    if (arranged) {
+      arranged.lanes.forEach((l, i) => l.members.forEach((id) => laneOf.set(id, i)));
       for (const n of d.nodes) if (n.parent && laneOf.has(n.parent)) laneOf.set(n.id, laneOf.get(n.parent)!);
     }
     const across = (e: { source: string; target: string }) => laneHandles(laneOf.get(e.source), laneOf.get(e.target), direction);
@@ -241,7 +262,7 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
     }
     return (edgesBefore.current = reconcile(edgesBefore.current, out, sameEdge));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, picked, focus, version, lanes, levelOrder, direction]);
+  }, [d, picked, focus, version, arranged, direction]);
 
   const onDragStop = useCallback((_: unknown, n: Node) => {
     positions.current.set(n.id, n.position);
@@ -252,15 +273,15 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
 
   const autoLayout = () => (pinned.current.size ? setConfirm(true) : void runFull());
 
-  // A new orientation, or lanes on or off, is a new layout; with cards pinned by hand it asks first, as
+  // A new orientation, or a new arrangement, is a new layout; with cards pinned by hand it asks first, as
   // Auto layout does.
-  const lastShape = useRef(`${direction}|${lanes}`);
+  const lastShape = useRef(`${direction}|${groupBy}`);
   useEffect(() => {
-    if (lastShape.current === `${direction}|${lanes}`) return;
-    lastShape.current = `${direction}|${lanes}`;
+    if (lastShape.current === `${direction}|${groupBy}`) return;
+    lastShape.current = `${direction}|${groupBy}`;
     autoLayout();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [direction, lanes]);
+  }, [direction, groupBy]);
 
   return (
     <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={onNodesChange}
@@ -277,8 +298,15 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
       <Panel position="top-right" className="layout-panel">
         <button type="button" onClick={autoLayout} disabled={status === 'running'}>
           {status === 'running' ? 'Laying out…' : 'Auto layout'}</button>
-        <label title="each abstraction level in its own band, top level first"><input type="checkbox" checked={lanes}
-          onChange={(e) => setLanes(e.target.checked)} aria-label="lanes by level" /> Lanes by level</label>
+        <label title="lanes by the first key, boxes inside a lane by the second; saved with the view">Group by{' '}
+          <select aria-label="group by" value={groupBy} onChange={(e) => {
+            const g = GROUP_BY.find((o) => keyOf(o.value) === e.target.value);
+            if (g) setGroupBy(g.value);
+          }}>
+            {GROUP_BY.map((o) => <option key={o.label} value={keyOf(o.value)}>{o.label}</option>)}
+            {!GROUP_BY.some((o) => keyOf(o.value) === groupBy) &&
+              <option value={groupBy}>{keys.map((k) => k[0].toUpperCase() + k.slice(1)).join(' → ')}</option>}
+          </select></label>
         <label title="the mouse wheel pans the diagram; Ctrl or Cmd with the wheel, a pinch, or the + and − buttons zoom">
           <input type="checkbox" checked={wheel === 'zoom'} aria-label="wheel zooms" onChange={(e) => {
             const w = e.target.checked ? 'zoom' : 'pan';

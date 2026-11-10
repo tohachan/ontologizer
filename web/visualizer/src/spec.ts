@@ -11,8 +11,13 @@ export function buildSpec(sel: Selection, extra: Partial<Pick<ViewSpec, 'groups'
       relationKinds: sel.kinds, relationTypeIris: sel.types, expansion: { hops: sel.hops, direction: sel.direction },
     },
     groups: extra.groups ?? [], summaries: extra.summaries ?? [], annotations: extra.annotations ?? [],
-    presentation: { languages: sel.languages, ...sel.layout },
+    presentation: { languages: sel.languages, ...layout(sel.layout) },
   };
+}
+
+// An arrangement left unset stays out of the spec: the default, and an old view's digest unchanged.
+function layout({ arrangement, ...rest }: Selection['layout']): Omit<ViewSpec['presentation'], 'languages'> {
+  return arrangement ? { ...rest, arrangement: [...arrangement] } : rest;
 }
 
 export const scopeKey = (s: ViewSpec['scope']) => JSON.stringify(s);

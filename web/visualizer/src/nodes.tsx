@@ -75,10 +75,12 @@ export function NoteNode({ data, selected }: Props) {
   return <div className={`note${selected ? ' selected' : ''}`} aria-label="annotation">✎ {data.node.label}</div>;
 }
 
-// A lane or a graph box: drawn behind the cards, never picked or dragged.
-export function BandNode({ data }: NodeProps & { data: { label: string; kind: 'lane' | 'box' } }) {
+// A lane or a box of an arrangement (lanes.ts): drawn behind the cards, never picked or dragged. Its label
+// names the key it groups by: `level domain`, `category Kind`, `graph p/one`.
+export function BandNode({ data }: NodeProps & { data: { label: string; kind: 'lane' | 'box'; key?: string } }) {
   return (
-    <div className={`band ${data.kind}`} aria-label={`${data.kind === 'lane' ? 'level' : 'graph'} ${data.label}`}>
+    <div className={`band ${data.kind}${data.key ? ` by-${data.key}` : ''}`}
+         aria-label={`${data.key ?? (data.kind === 'lane' ? 'level' : 'graph')} ${data.label}`}>
       <div className="band-title">{data.label}</div>
     </div>
   );

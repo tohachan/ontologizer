@@ -337,7 +337,9 @@ export function App() {
             ? <ReactFlowProvider>
                 <Actions compilation={compilation} picked={picked} onAction={onAction} busy={busy} />
                 <Canvas key={canvasKey} compilation={compilation} picked={picked} onPick={onPick} direction={sel.layout.direction}
-                        initialLayout={initialLayout} layoutRef={layoutRef} defaultLanes levelOrder={ownerCat?.levels ?? NO_LEVELS} />
+                        initialLayout={initialLayout} layoutRef={layoutRef} defaultLanes levelOrder={ownerCat?.levels ?? NO_LEVELS}
+                        arrangement={sel.layout.arrangement}
+                        onArrangement={(a) => setSel((cur) => ({ ...cur, layout: { ...cur.layout, arrangement: a } }))} />
               </ReactFlowProvider>
             : <p className="muted placeholder">{owner ? 'Choose graphs and starting concepts, then show the diagram.' : 'Choose an owner.'}</p>}
         </section>
@@ -402,8 +404,9 @@ function Ask({ onAsk, busy, candidates, onPick }: { onAsk: (q: string) => void; 
 }
 
 // What a compile takes from the spec apart from the scope and selection: labels, limits, groups and notes.
+// Orientation and arrangement are drawn at once.
 function drawn(spec: ReturnType<typeof buildSpec>) {
-  const { direction: _d, ...rest } = spec.presentation;
+  const { direction: _d, arrangement: _a, ...rest } = spec.presentation;
   return [rest, spec.groups, spec.summaries, spec.annotations];
 }
 

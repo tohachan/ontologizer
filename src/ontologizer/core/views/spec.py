@@ -92,6 +92,7 @@ class ViewSpec:
     max_nodes: int
     max_edges: int
     preset: str
+    arrangement: tuple[str, ...] | None = None   # canvas grouping, outer first; None: the default (level lanes)
 
     def to_json(self) -> dict:
         return {
@@ -110,7 +111,9 @@ class ViewSpec:
             "annotations": [{"id": a.id, "text": a.text, "target": {"kind": a.target_kind, "id": a.target_id}}
                             for a in self.annotations],
             "presentation": {"languages": list(self.languages), "direction": self.layout_direction,
-                             "maxNodes": self.max_nodes, "maxEdges": self.max_edges, "preset": self.preset},
+                             "maxNodes": self.max_nodes, "maxEdges": self.max_edges, "preset": self.preset,
+                             # written only when set, so a spec without it keeps its digest
+                             **({"arrangement": list(self.arrangement)} if self.arrangement is not None else {})},
         }
 
 
@@ -153,7 +156,8 @@ def parse(data: dict) -> ViewSpec:
                           for a in data["annotations"]),
         languages=tuple(data["presentation"]["languages"]), layout_direction=data["presentation"]["direction"],
         max_nodes=data["presentation"]["maxNodes"], max_edges=data["presentation"]["maxEdges"],
-        preset=data["presentation"]["preset"])
+        preset=data["presentation"]["preset"],
+        arrangement=tuple(a) if (a := data["presentation"].get("arrangement")) is not None else None)
     issues = _structure(spec)
     if issues:
         raise SpecError(issues)

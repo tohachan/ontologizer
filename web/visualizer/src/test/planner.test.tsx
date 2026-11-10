@@ -73,3 +73,17 @@ it('a provider failure leaves the view as it was', async () => {
   expect(compiled.length).toBe(before);
   expect(screen.getByLabelText('concept Order')).toBeTruthy();
 });
+
+it('a proposal can set the arrangement, and the canvas groups by it', async () => {
+  await ready();
+  planReply = { status: 200, body: { snapshotId: 's', summary: 'Kinds together.', candidates: [], repaired: false, spec: {
+    schemaVersion: 1, id: 'untitled', title: 'Untitled view', scope: { primaryGraphs: ['shared/domain'], contextGraphs: ['upper/gufo'] },
+    selection: { entities: ['urn:sample:Order'], excludedEntities: [], levels: [], relationKinds: ['kit-relation'], relationTypeIris: [],
+                 expansion: { hops: 1, direction: 'both' } }, groups: [], summaries: [], annotations: [],
+    presentation: { languages: ['en'], direction: 'RIGHT', maxNodes: 80, maxEdges: 160, preset: 'domain', arrangement: ['category', 'level'] } } } };
+  fireEvent.change(screen.getByLabelText('request'), { target: { value: 'kinds together' } });
+  fireEvent.click(screen.getByText('Ask'));
+  await screen.findByLabelText('concept Order');
+  expect(compiled.at(-1)!.presentation.arrangement).toEqual(['category', 'level']);
+  expect((screen.getByLabelText('group by') as HTMLSelectElement).value).toBe('category>level');
+});

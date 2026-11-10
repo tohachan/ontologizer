@@ -150,3 +150,48 @@ it('the manual editor sets the orientation that is saved', async () => {
   await screen.findByText(/Saved as “Upwards”/);
   expect((reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec as { presentation: { direction: string } }).presentation.direction).toBe('UP');
 });
+
+it('Group by goes into the saved spec and its layout, and opens again the same way', async () => {
+  await diagram();
+  const select = () => screen.getByLabelText('group by') as HTMLSelectElement;
+  expect(select().value).toBe('level>graph');                                    // the default
+  expect(reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec).not.toHaveProperty('presentation.arrangement');
+  fireEvent.change(select(), { target: { value: 'level>category' } });
+  expect(screen.getByText('Show diagram')).toBeTruthy();
+  expect(screen.queryByLabelText('pending')).toBeNull();                          // drawn at once, like orientation
+  fireEvent.change(screen.getByLabelText('view title'), { target: { value: 'By category' } });
+  fireEvent.click(screen.getByText('Save'));
+  await screen.findByText(/Saved as “By category”/);
+  const spec = reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec as { presentation: { arrangement?: string[] } };
+  expect(spec.presentation.arrangement).toEqual(['level', 'category']);
+  const put = reqs.find((r) => r.method === 'PUT')!;
+  expect((put.body!.layout as { engine: string }).engine).toBe('elkjs-0.12.0/layered+lanes:level>category');
+  stored = { artifactVersion: 1, revision: 1, spec: spec as Artifact['spec'], layout: put.body!.layout as Artifact['layout'],
+             manifest: compilation('x').manifest, baseline: {} };
+  revision = 1;
+  fireEvent.change(screen.getByLabelText('owner'), { target: { value: 'study' } });
+  fireEvent.click(await within(await screen.findByLabelText('saved views')).findByText('By category'));
+  await screen.findByText(/By category \(rev 1\)/);
+  expect(select().value).toBe('level>category');
+});
+
+it('a view saved before arrangements opens with or without lanes as its layout says', async () => {
+  await diagram();
+  const old = (id: string, engine: string): Artifact => ({
+    artifactVersion: 1, revision: 1, layout: { positions: { 'entity:order': { x: 5, y: 5 } }, pinned: [], viewport: null, engine },
+    manifest: compilation('x').manifest, baseline: {},
+    spec: { schemaVersion: 1, id, title: id, scope: { primaryGraphs: ['shared/domain'], contextGraphs: ['upper/gufo'] },
+      selection: { entities: ['urn:sample:Order'], excludedEntities: [], levels: [], relationKinds: ['kit-relation'], relationTypeIris: [],
+                   expansion: { hops: 1, direction: 'both' } },
+      groups: [], summaries: [], annotations: [], presentation: { languages: ['en'], direction: 'RIGHT', maxNodes: 80, maxEdges: 160, preset: 'domain' } },
+  });
+  for (const [engine, want] of [['elkjs-0.12.0/layered+lanes', 'level>graph'], ['elkjs-0.12.0/layered', '']] as const) {
+    stored = old(`old-${want ? 'lanes' : 'plain'}`, engine);
+    revision = 1;
+    fireEvent.change(screen.getByLabelText('owner'), { target: { value: 'study' } });
+    fireEvent.click(await within(await screen.findByLabelText('saved views')).findByText(stored.spec.title));
+    await screen.findByText(new RegExp(`${stored.spec.title} \\(rev 1\\)`));
+    expect((screen.getByLabelText('group by') as HTMLSelectElement).value).toBe(want);
+    expect(reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec).toEqual(stored.spec);   // the spec is left as it was
+  }
+});

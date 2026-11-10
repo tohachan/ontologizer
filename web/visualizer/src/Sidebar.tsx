@@ -7,7 +7,8 @@ export type Selection = {
   seeds: { iri: string; label: string }[]; excluded: string[]; levels: string[];
   kinds: RelationKind[]; hops: number; direction: 'forward' | 'reverse' | 'both';
   types: string[];                                       // relation type IRIs; empty means every type
-  layout: { direction: ViewSpec['presentation']['direction']; maxNodes: number; maxEdges: number; preset: string };
+  layout: { direction: ViewSpec['presentation']['direction']; maxNodes: number; maxEdges: number; preset: string;
+            arrangement?: ViewSpec['presentation']['arrangement'] };
 };
 
 const KINDS: [RelationKind, string][] = [

@@ -112,7 +112,12 @@
         "direction": {"enum": ["RIGHT", "LEFT", "DOWN", "UP"]},
         "maxNodes": {"type": "integer", "minimum": 1, "maximum": 200},
         "maxEdges": {"type": "integer", "minimum": 0, "maximum": 400},
-        "preset": {"$ref": "#/$defs/id"}
+        "preset": {"$ref": "#/$defs/id"},
+        "arrangement": {
+          "description": "How the canvas groups cards, outer key first: lanes by the first key, labelled boxes inside a lane by the second. Absent: level lanes with graph boxes in mixed lanes. Empty: no grouping. A layout matter; the compiler only validates and echoes it.",
+          "type": "array", "maxItems": 2, "uniqueItems": true,
+          "items": {"enum": ["level", "graph", "category", "group"]}
+        }
       }
     }
   },
