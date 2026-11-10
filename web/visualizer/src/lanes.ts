@@ -43,12 +43,10 @@ export const CATEGORY_ORDER = [
   'TemporaryInstantiationSituation', 'TemporaryParthoodSituation', 'TemporaryRelationshipSituation', 'Situation',
   'QualityValue', 'ConcreteIndividual', 'AbstractIndividual', 'Individual',
 ];
-// Which marker names a card when it has several: what its instances are (a relator, a mode, a collection)
-// before the plain Kind, as OntoUML's «relator» replaces «kind»; then the other type-level classes in display
-// order; then the individual-level ones; then any other upper ontology's markers by name.
-const NATURE = ['Relator', 'IntrinsicMode', 'ExtrinsicMode', 'Quality', 'Collection', 'FixedCollection',
-                'VariableCollection', 'Quantity'];
-const PRECEDENCE = [...NATURE, ...CATEGORY_ORDER.filter((c) => !NATURE.includes(c))];
+// Which marker names a card when it has several: the first in display order, so a Kind that is also a
+// Relator or a Collection sits with the Kinds (the owner's choice, 2026-11-10); the individual-level classes
+// only when no type-level marker is there; then any other upper ontology's markers by name.
+const PRECEDENCE = CATEGORY_ORDER;
 
 const localName = (iri: string) => iri.split(/[#/:]/).pop() || iri;
 const gufoName = (iri: string) => (iri.startsWith(GUFO) ? iri.slice(GUFO.length) : null);

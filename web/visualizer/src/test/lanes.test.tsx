@@ -123,12 +123,13 @@ const c = (id: string, level: string | null, cats: string[], over: Partial<DNode
   n(id, level, 'g/one', { categories: cats.map((x) => G + x), ...over });
 
 describe('arrangement by gUFO category', () => {
-  it('names a card by its type-level marker, a relator kind a Relator, whatever the order of the markers', () => {
+  it('names a card by its type-level marker, a relator kind a Kind, whatever the order of the markers', () => {
     expect(categoryOf([G + 'FunctionalComplex', G + 'Kind'])).toBe('Kind');
     expect(categoryOf([G + 'Kind', G + 'FunctionalComplex'])).toBe('Kind');
     expect(categoryOf([G + 'Event', G + 'EventType'])).toBe('EventType');
-    expect(categoryOf([G + 'Relator', G + 'Kind'])).toBe('Relator');
-    expect(categoryOf([G + 'Kind', G + 'Relator'])).toBe('Relator');
+    expect(categoryOf([G + 'Relator', G + 'Kind'])).toBe('Kind');
+    expect(categoryOf([G + 'Kind', G + 'Relator'])).toBe('Kind');
+    expect(categoryOf([G + 'Relator'])).toBe('Relator');
     expect(categoryOf([G + 'Role'])).toBe('Role');
     expect(categoryOf([G + 'AbstractIndividual', G + 'AbstractIndividualType'])).toBe('AbstractIndividualType');
     expect(categoryOf([G + 'FunctionalComplex'])).toBe('FunctionalComplex');           // no type-level marker
@@ -139,7 +140,7 @@ describe('arrangement by gUFO category', () => {
 
   it('orders category lanes: sortals, non-sortals, relators, events and situations, abstract types, then the rest', () => {
     const ns = [c('ab', 'domain', ['AbstractIndividualType']), c('ev', 'domain', ['Event', 'EventType']),
-                c('none', 'domain', []), c('rel', 'domain', ['Kind', 'Relator']), c('mix', 'domain', ['Mixin']),
+                c('none', 'domain', []), c('rel', 'domain', ['Relator']), c('mix', 'domain', ['Mixin']),
                 c('role', 'domain', ['Role']), c('k2', 'task', ['FunctionalComplex', 'Kind']),
                 c('k1', 'domain', ['Kind', 'FunctionalComplex']), c('sit', 'domain', ['SituationType']),
                 n('agg', 'domain', null, { kind: 'aggregate', origin: 'aggregate' })];
@@ -148,6 +149,11 @@ describe('arrangement by gUFO category', () => {
       ['Kind', ['k2', 'k1']], ['Role', ['role']], ['Mixin', ['mix']], ['Relator', ['rel']], ['EventType', ['ev']],
       ['SituationType', ['sit']], ['AbstractIndividualType', ['ab']], ['mixed', ['agg']], ['no category', ['none']]]);
     expect(a.boxes.size).toBe(0);
+  });
+
+  it('a collapsed group goes with the category the compiler says its members share', () => {
+    const ns = [c('k', 'domain', ['Kind']), n('agg', 'domain', null, { kind: 'aggregate', origin: 'aggregate', categories: [G + 'Kind'] })];
+    expect(arrange(ns, ['category'], ORDER)!.lanes.map((l) => [l.key, l.members])).toEqual([['Kind', ['k', 'agg']]]);
   });
 
   it('an area takes its members\' shared category, else mixed', () => {
@@ -274,5 +280,16 @@ describe('Group by on the canvas', () => {
     expect((screen.getByLabelText('group by') as HTMLSelectElement).value).toBe('category');
     fireEvent.click(screen.getByText('Auto layout'));
     await waitFor(() => expect(graphs.map((g) => g.id)).toEqual(['lane:Kind', 'lane:Role', 'lane:EventType']));
+  });
+});
+
+describe('a spec built for the viewer', () => {
+  it('keeps the arrangement the viewer chose when it says none, and its own when it does', async () => {
+    const { keepArrangement } = await import('../App');
+    const sel = { layout: { arrangement: ['level', 'category'] } } as unknown as Parameters<typeof keepArrangement>[1];
+    const none = { s: { layout: { direction: 'RIGHT' } } } as unknown as Parameters<typeof keepArrangement>[0];
+    expect(keepArrangement(none, sel).s.layout.arrangement).toEqual(['level', 'category']);
+    const own = { s: { layout: { arrangement: ['graph'] } } } as unknown as Parameters<typeof keepArrangement>[0];
+    expect(keepArrangement(own, sel).s.layout.arrangement).toEqual(['graph']);
   });
 });

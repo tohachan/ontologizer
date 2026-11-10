@@ -18,7 +18,7 @@ from ontologizer.core.views.reader import choose_label
 from ontologizer.core.views.scope import Scope
 from ontologizer.core.views.spec import ViewSpec
 
-COMPILER_VERSION = "2"
+COMPILER_VERSION = "3"
 KIND_ORDER = {"kit-relation": 0, "kit-mapping": 1, "class-inheritance": 2, "rdf-assertion": 3}
 UPPER_PREFIX = "upper/"
 
@@ -142,6 +142,19 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
     def graph_of(iri: str) -> str | None:
         gs = sorted(ents[iri].graphs, key=lambda g: (g not in primary, g))
         return path_of.get(gs[0]) if gs else None
+
+    def categories_of(iri: str) -> set[str]:
+        e = ents[iri]
+        return markers.get(iri, set()) | ({e.upper_category} if e.upper_category else set())
+
+    def shared_categories(members) -> tuple[str, ...]:
+        # a collapsed group shows the categories all its members have, so it can be arranged by them
+        common = set.intersection(*(categories_of(m) for m in members)) if members else set()
+        return tuple(sorted(common))
+
+    def shared_graph(members) -> str | None:
+        gs = {graph_of(m) for m in members}
+        return gs.pop() if len(gs) == 1 else None
 
     def shared_level(members) -> str | None:
         lv = {ents[m].level for m in members}
@@ -274,7 +287,8 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
             internal = sum(1 for r in plain if r.source in members and r.target in members)
             nodes.append(Node(id=nid, kind="aggregate", origin="aggregate", label=g.title, members=members,
                               level=shared_level(members), statuses=statuses, mandatory=True,
-                              internal_relationships=internal))
+                              internal_relationships=internal, categories=shared_categories(members),
+                              graph=shared_graph(members)))
             placement.update({m: nid for m in members})
         else:
             nodes.append(Node(id=f"area:{g.id}", kind="area", origin="aggregate", label=g.title, members=members,
@@ -289,7 +303,7 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
         nodes.append(Node(id=nid, kind="concept", origin="source", label=choose_label(e, langs), members=(iri,),
                           parent=area_of.get(iri), level=e.level, status=e.status,
                           statuses=(e.status,) if e.status else (),
-                          categories=tuple(sorted(markers.get(iri, set()) | ({e.upper_category} if e.upper_category else set()))),
+                          categories=tuple(sorted(categories_of(iri))),
                           hop=hop.get(iri), mandatory=iri in mandatory, context=is_context(iri),
                           owl_structure=e.owl_structure, graph=graph_of(iri)))
 

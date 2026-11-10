@@ -203,7 +203,7 @@ export function App() {
     try {
       const r = await api.overview(owner, version, sel.languages);
       if (mine !== request.current) return;
-      const { s, x } = fromSpec(r.spec, { ...START, languages: sel.languages });
+      const { s, x } = keepArrangement(fromSpec(r.spec, { ...START, languages: sel.languages }), sel);
       snapshot.current = { key: scopeKey(r.spec.scope), id: r.snapshotId };
       // the current view, its layout and its saved identity stay until the overview has compiled
       const c = await compileWith(s, x, { id: 'untitled', title: r.spec.title });
@@ -224,7 +224,7 @@ export function App() {
     } finally {
       if (mine === request.current) setBusy(false);
     }
-  }, [owner, sel.languages, compileWith]);
+  }, [owner, sel, compileWith]);
 
   // A planner proposal is a spec like any other: shown at once, saved only by Save.
   const [candidates, setCandidates] = useState<{ name: string; iris: string[] }[]>([]);
@@ -236,7 +236,7 @@ export function App() {
       const r = await api.plan(owner, spec, text, snapshotFor(scopeKey(spec.scope)));
       snapshot.current = { key: scopeKey(spec.scope), id: r.snapshotId };
       if (!r.spec) { setCandidates(r.candidates); setNotice('The request names something several concepts could be; pick one.'); return; }
-      const { s, x } = fromSpec(r.spec, sel);
+      const { s, x } = keepArrangement(fromSpec(r.spec, sel), sel);
       await apply(s, x);
       setNotice(`${r.summary || 'View proposed.'}${r.repaired ? ' (corrected once after a check)' : ''}`);
     } catch (e) {
@@ -415,6 +415,12 @@ function contextCards(c: Compilation): Record<string, number> {
   const out: Record<string, number> = {};
   for (const n of c.diagram.nodes) if (n.context && n.graph) out[n.graph] = (out[n.graph] ?? 0) + 1;
   return out;
+}
+
+// A spec built for the viewer (the overview, a planner's proposal) that says nothing of its arrangement keeps
+// the one the viewer chose.
+export function keepArrangement<T extends { s: Selection }>(r: T, sel: Selection): T {
+  return r.s.layout.arrangement || !sel.layout.arrangement ? r : { ...r, s: { ...r.s, layout: { ...r.s.layout, arrangement: sel.layout.arrangement } } };
 }
 
 export const NODE_LIMITS = [40, 80, 120, 160, 200];

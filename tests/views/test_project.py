@@ -317,3 +317,18 @@ def test_filtered_by_level_counts_only_the_level_filter_not_hidden_intermediates
     ents = [entity("A"), entity("B", level="task"), entity("C")]
     d = compile_view(spec(selection={"levels": ["domain"]}), scope(), model(ents, [rel("A", "B"), rel("A", "C")]))
     assert d.counts.filtered_by_level == 1 and d.counts.hidden_by_rule == 1
+
+
+def test_a_collapsed_group_carries_the_categories_and_graph_its_members_share():
+    ents = [entity("A"), entity("B"), entity("C")]
+    rels = [rel("A", GUFO + "Kind", kind="class-inheritance", type_="rdfs:subClassOf"),
+            rel("B", GUFO + "Kind", kind="class-inheritance", type_="rdfs:subClassOf"),
+            rel("B", GUFO + "Relator", kind="class-inheritance", type_="rdfs:subClassOf"),
+            rel("C", GUFO + "EventType", kind="class-inheritance", type_="rdfs:subClassOf")]
+    d = compile_view(spec(groups=[{"id": "g", "title": "G", "members": [X + "A", X + "B"], "collapsed": True}]),
+                     scope(), model(ents, rels))
+    by = {n.id: n for n in d.nodes}
+    assert by["aggregate:g"].categories == (GUFO + "Kind",) and by["aggregate:g"].graph == "p/one"
+    d2 = compile_view(spec(groups=[{"id": "m", "title": "M", "members": [X + "A", X + "C"], "collapsed": True}]),
+                      scope(), model(ents, rels))
+    assert next(n for n in d2.nodes if n.kind == "aggregate").categories == ()     # Kind and EventType: nothing shared
