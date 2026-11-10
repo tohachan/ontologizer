@@ -197,6 +197,29 @@ uv run --project ../ontologizer ontologizer export-md                    # → e
 | `export-md` | Writes markdown for the owned graphs plus comparison views; the output is deterministic |
 | `query FILE.rq` / `query 'SPARQL'` | Runs a SPARQL SELECT over the store and prints one row per line |
 | `consolidation-report` / `consolidate FILE.yaml` | Reports what the extractions say about the shared levels / applies a decision file to the shared-level and application files |
+| `visualizer [--port 8090]` | Serves the read-only web view of the ontology (below) |
+
+### Visualizer
+
+A read-only web view of the ontology: pick an owner, its graphs and some starting concepts, and see
+them as a diagram. You can group concepts into areas and collapse them, hide concepts, summarize a
+path, attach notes, and save the view. The inspector shows why each element is there and its source
+statements and evidence. Nothing is written to the store; a saved view is a JSON file in the owner's
+`paths.views` (default `views/`). The design is [`docs/visualizer.md`](docs/visualizer.md).
+
+```sh
+make viz-up      # its own container beside the engine: http://127.0.0.1:8090/
+make viz-down    # the engine keeps running
+```
+
+Without Docker: `npm ci && npm run build` in `web/visualizer`, then `uv run ontologizer visualizer`.
+What runs where (host, worktree, VM) is in [`deps/visualizer/README.md`](deps/visualizer/README.md).
+Requests in natural language are off unless the hub's `ontologizer.local.yaml` names a planner:
+
+```yaml
+visualizer:
+  planner: { adapter: chat, url: https://openrouter.ai/api/v1, model: <provider/model>, env: OPENROUTER_API_KEY }
+```
 
 ### Using an ontology
 
@@ -290,7 +313,9 @@ my-index = "my_adapters.index:factory"     # factory(conf: dict, *, base: Path) 
 | --- | --- |
 | `src/ontologizer/core/` | Config cascade, levels and SHACL generation, extraction schema and converter, write route, consolidation; the process stages (`frame`, `inventory`, `brief`, `reconcile`, `mapping`, `grouping`, `verify`, `report`, `review`, `update_check`), runs and decisions (`run`), adapter loading (`plugins`) |
 | `src/ontologizer/ports/` | Engine, exporter, evidence, inventory and decision ports |
-| `src/ontologizer/adapters/` | Open Ontologies engine adapter, markdown exporter, built-in `checkout` evidence, `graphify` and `rdf` inventory and `jev` decision adapters |
+| `src/ontologizer/core/views/` | Visualizer core: scope, bounded read, reader, ViewSpec, projection, saved views, planning checks |
+| `src/ontologizer/adapters/` | Open Ontologies engine adapter, markdown exporter, built-in `checkout` evidence, `graphify` and `rdf` inventory and `jev` decision adapters; the visualizer's HTTP service (`visualization/`) and `chat` view planner |
+| `web/visualizer/`, `schemas/views/`, `deps/visualizer/` | Visualizer browser app (React Flow, ELK), the ViewSpec JSON Schema, its container |
 | `templates/` | `frame.md` (stage 0) and the extraction briefs, one for a system's source and one for a description (stage 2) |
 | `presets/` | Level presets as data (`guarino-4.yaml`) |
 | `kit/vocab.ttl`, `vendor/` | Kit vocabulary (`ok:`), pinned gUFO 1.0.0 |
@@ -305,4 +330,4 @@ Agent instructions: [`AGENTS.md`](AGENTS.md).
 
 ## License
 
-Apache License 2.0 ([`LICENSE`](LICENSE)). The vendored gUFO ontology (`vendor/gufo-1.0.0.ttl`) is CC BY 4.0; see [`NOTICE`](NOTICE).
+Apache License 2.0 ([`LICENSE`](LICENSE)). The vendored gUFO ontology (`vendor/gufo-1.0.0.ttl`) is CC BY 4.0. The visualizer's browser bundle includes React and React Flow (MIT) and elkjs (EPL-2.0); see [`NOTICE`](NOTICE).

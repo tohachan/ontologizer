@@ -10,3 +10,15 @@ This repository includes third-party material under its own licence:
   Giancarlo Guizzardi, Tiago P. Sales and Ricardo A. Falbo. Licensed under Creative Commons Attribution 4.0 International
   (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/legalcode.
   Source: https://purl.org/nemo/gufo. Included unmodified.
+
+The visualizer's browser bundle (built from web/visualizer into
+web/visualizer/dist and into the visualizer image; not committed) includes:
+
+- react and react-dom, (c) Meta Platforms, Inc. and affiliates, MIT License.
+- @xyflow/react and @xyflow/system (React Flow), (c) webkid GmbH, MIT License.
+- elkjs, Eclipse Layout Kernel compiled to JavaScript, (c) Kiel University and
+  others, Eclipse Public License 2.0, https://www.eclipse.org/legal/epl-2.0/.
+  Source: https://github.com/kieler/elkjs (version 0.12.0). Used unmodified.
+
+Exact versions are in web/visualizer/package-lock.json. No code from Open
+Ontologies Studio is included.

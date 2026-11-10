@@ -1,6 +1,6 @@
 # Domain Ontology Visualizer Design Specification
 
-Status: Proposed, awaiting the owner's acceptance  
+Status: Accepted; implemented (see *Where each case is tested* and *Measurements*)  
 Date: 2026-11-09  
 Target: Ontologizer with Open Ontologies as an external service  
 Rendering: React Flow and ELK, two dimensional only  
@@ -468,6 +468,52 @@ Required acceptance cases:
 | A stale ELK worker response arrives | It cannot replace the newer diagram |
 | A planner returns unknown IRIs or invalid paths | Validation rejects the proposal |
 | The user moves or removes a visual element | No ontology write request occurs |
+
+### Where each case is tested
+
+Paths are under `tests/views/` unless named otherwise; browser tests are in `web/visualizer/src/test/`.
+
+| Case | Tests |
+| --- | --- |
+| Identical local names in different namespaces | `tests/views/test_reader.py::test_identical_local_names_in_two_namespaces_are_two_entities` |
+| Labels with tags, quotes, escapes, typed literals | `test_read.py::test_snapshot_round_trips_literals`, `test_reader.py::test_labels_keep_tags_quotes_escapes_and_choose_by_language` |
+| Two superclass relationships | `test_reader.py::test_two_superclasses_are_two_inheritance_relationships` |
+| A reified kit relation | `test_reader.py::test_reified_relation_is_one_relationship_with_record_status_and_evidence` |
+| A mapping with only a candidate label | `test_reader.py::test_mapping_with_a_target_and_a_candidate_without_one` |
+| Conflicting records in different scopes | `test_reader.py::test_a_record_is_not_assembled_from_fragments_in_two_graphs`, `test_scope.py::test_primary_of_another_owner_is_refused` |
+| Working and release graphs coexist | `test_scope.py::test_working_and_release_never_mix`, `test_glob_without_a_version_does_not_reach_releases` |
+| A two-edge path is summarized | `test_project.py::test_a_summary_replaces_its_path_and_keeps_it_inspectable`; browser `ops-app.test.tsx` (summary with a reverse step) |
+| An area is collapsed and expanded | `test_project.py::test_collapsed_group_redirects_external_edges_and_counts_internal_ones`; browser `canvas.test.tsx` (positions restored) |
+| A hypothesis grouped with asserted data | `test_project.py::test_mixed_statuses_survive_aggregation`; browser `ops-app.test.tsx` |
+| A property with several domains or ranges | `test_reader.py::test_domain_and_range_make_no_relationship` |
+| Unsupported OWL restrictions | `test_reader.py::test_owl_restriction_is_an_indicator_not_an_edge` |
+| Content changes, triple count equal | `test_read.py::test_fingerprint_sees_a_change_with_the_same_triple_count`, `test_api.py::test_refresh_reports_what_changed_against_the_saved_baseline` |
+| Upstream null, error, malformed JSON, timeout | `test_read.py` transport tests (incl. a dripping server); `test_api.py::test_engine_failures_are_errors_and_leak_nothing`; browser `app.test.tsx` failures |
+| Required seeds exceed the display limit | `test_project.py::test_mandatory_elements_over_the_budget_are_an_error`, `test_api.py::test_compile_errors[display-limit]` |
+| An old save revision | `test_storage.py::test_a_stale_save_is_a_conflict`, `test_concurrent_saves_from_the_same_revision_let_one_win`; browser `views.test.tsx` |
+| A stale ELK worker response | browser `elk.test.ts` (runner), `canvas.test.tsx::applies the newest layout and drops a late older one` |
+| A planner returns unknown IRIs or invalid paths | `tests/view_planner/test_planner.py::test_an_unknown_iri_gets_one_repair_with_the_errors`, `test_proposals_that_fail_are_refused` |
+| Moving or removing an element writes nothing | browser `ops-app.test.tsx` (no request beyond reads), `scenario.test.tsx` (PUT only for the view file) |
+| An upper superclass | `test_project.py::test_an_upper_superclass_is_a_marker_not_an_edge_or_a_hub` |
+| A mapping target in a context graph | `test_project.py::test_a_context_entity_ends_an_edge_but_is_not_a_transit_node` |
+| A saved view refers to a vanished entity | `test_api.py::test_a_vanished_entity_is_marked_and_never_replaced` |
+| Collapse and expand in one session | `test_api.py::test_an_edit_on_the_same_snapshot_reads_nothing_new`; browser `ops-app.test.tsx` (one snapshot) |
+| Foreign Host or Origin, non-JSON content | `test_api.py::test_request_guards`, `test_server_answers_only_to_its_host` |
+| The engine token | `test_api.py::test_engine_failures_are_errors_and_leak_nothing`; image layers, history and config checked by hand (`make viz-up`, commit message of the container) |
+| The visualizer starts while the engine runs | not automated: the owner's check on the host (`deps/visualizer/README.md`) |
+| The planner is off | `test_planner.py::test_without_a_planner_the_service_and_manual_flow_work`; browser `planner.test.tsx`, `scenario.test.tsx` |
+
+### Measurements
+
+On the development VM (4 cores, aarch64), synthetic views (`uv run scripts/views_bench.py`; browser `bench.test.ts`):
+
+| Nodes | Edges | Normalize | Project | ELK layout |
+| --- | --- | --- | --- | --- |
+| 50 | 117 | 3.2 ms | 0.4 ms | 134 ms |
+| 100 | 258 | 6.5 ms | 0.8 ms | 179 ms |
+| 200 | 400 | 13.0 ms | 1.7 ms | 411 ms |
+
+Both targets hold with a wide margin: projection under one second, layout under two seconds at 200 nodes. The source read dominates: 9,845 quads (the largest working graph with its context) in 0.29 s, all working graphs (87,829 quads) in 3.4 s, measured read-only against the working store; an edit reuses the snapshot and reads nothing. Render time in a browser has not been measured.
 
 Add deterministic projection tests, API schema contract tests, one browser flow covering scope → compile → group → inspect → save → reload with the planner both on and off, and planner tests using a stub provider. Test edge routing across area boundaries at different zoom levels and card sizes.
 
