@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import { Sidebar, type Selection } from '../Sidebar';
+import { reachOf, Sidebar, type Selection } from '../Sidebar';
 import { contextRows, switchVersion, withContext } from '../scopeRows';
 import type { GraphEntry, ScopeFacts } from '../types';
 
@@ -68,9 +68,33 @@ describe('the scope picker', () => {
     expect(screen.getByLabelText('mappings in scope').textContent).toBe('0 in scope, 70 point outside');
     expect(screen.getByLabelText('inheritance in scope').textContent).toBe('none in these graphs');
     expect(screen.getByLabelText('filtered by level').textContent).toContain('3 linked concept(s)');
-    expect(screen.getByLabelText('hops note')).toBeTruthy();
-    fireEvent.click(screen.getByText('add it as context'));
+    // starting from levels with no linked graph to reach, hops and direction say why they do nothing
+    expect((screen.getByLabelText('hops') as HTMLSelectElement).disabled).toBe(true);
+    expect(screen.getByLabelText('reach note').textContent).toContain('change nothing');
+    fireEvent.click(screen.getByText('add it as a linked graph'));
     expect(scope()[1]).toEqual(['shared/domain@0.2', 'upper/gufo']);
+    // with a linked graph, one hop is all a level view can follow
+    const hops = screen.getByLabelText('hops') as HTMLSelectElement;
+    expect(hops.disabled).toBe(false);
+    expect([...hops.options].map((o) => o.value)).toEqual(['0', '1']);
+    expect(screen.getByLabelText('reach note').textContent).toContain('more hops reach no further');
+  });
+
+  it('says which levels the ticked graphs have, and how many cards each linked graph gave', () => {
+    render(<Sidebar owners={[]} owner="me" onOwner={() => {}} graphs={GRAPHS} levels={['domain', 'application']}
+                    sel={{ ...START, context: ['shared/domain', 'upper/gufo'] }} onChange={() => {}} onSearch={() => {}} hits={[]}
+                    searching={false} onCompile={() => {}} busy={false} onUnhide={() => {}} shownFrom={{ 'shared/domain': 4 }} pending />);
+    expect(screen.getByLabelText('domain').closest('label')!.textContent).toContain('no ticked graph is at this level');
+    expect(screen.getByLabelText('application').closest('label')!.textContent).not.toContain('no ticked graph');
+    expect(screen.getByLabelText('shown from shared/domain').textContent).toBe('4 shown');
+    expect(screen.getByLabelText(/upper\/gufo/).closest('label')!.textContent).toContain('category tags');
+    expect(screen.getByLabelText('pending').textContent).toContain('show it again');
+  });
+
+  it('with chosen concepts, every hop counts, and 0 hops makes the direction moot', () => {
+    const seeded = { ...START, seeds: [{ iri: 'urn:x', label: 'X' }] };
+    expect(reachOf(seeded, GRAPHS)).toEqual({ hopOptions: [0, 1, 2, 3], hopsValue: 1 });
+    expect(reachOf({ ...seeded, hops: 0 }, GRAPHS).direction).toContain('0 hops');
   });
 });
 

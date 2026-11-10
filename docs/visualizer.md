@@ -365,6 +365,16 @@ The scope picker offers no combination the server refuses. The owner's graphs ar
 - When ticked levels filter out linked concepts, the picker gives their number (`counts.filteredByLevel`, which leaves out intermediates a path summary hides). It shows this only while the selection is the one the diagram was compiled from.
 - In a view started from levels, hops and direction only reach context concepts, and the picker says so.
 
+The sidebar is in blocks, so it is visible which settings choose concepts and which only draw them. Every control that is enabled changes the next diagram; one that cannot is disabled and says why.
+
+- **Graphs of this owner.** The primary graphs.
+- **Start from.** Either every concept of the ticked levels, or the concepts added from search. A level that no ticked graph has is marked: it only lets links reach the linked graphs' concepts of that level. With chosen concepts, the levels only limit where links lead.
+- **Follow links.** Relationship kinds, hops and direction. A linked graph's concept is never followed further, so a view started from levels offers 0 or 1 hop. Without a linked graph to reach, hops and direction are disabled, and with 0 hops the direction is disabled.
+- **Linked graphs** (the context). These are not a start: their concepts appear only where a followed link reaches them. Each row shows how many cards it gave the last diagram, while the scope is unchanged. An `upper/` graph gives category tags, never cards.
+- **Display.** Orientation, which applies at once; labels; and the display limits. None of these chooses concepts.
+
+When the settings differ from those the diagram was compiled with, the sidebar says so above Show diagram.
+
 Run ELK in a worker when supported. Feed measured node dimensions, port definitions, and area containment into a dedicated adapter. Convert ELK coordinates to React Flow parent-relative coordinates and account for area padding. Preserve stable visual IDs through layout.
 
 If rendering ELK's orthogonal routes, implement an edge component that uses its routed sections and bend points. React Flow's default smooth-step edge is not a substitute for those routes. Cross-area edges must remain connected to the correct member ports.

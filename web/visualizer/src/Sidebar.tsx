@@ -23,7 +23,27 @@ type Props = {
   facts?: ScopeFacts | null;                             // of the last diagram, when it has this scope
   onOverview?: (version: string) => void;
   filteredByLevel?: number;                              // of the last diagram, when it has these settings
+  shownFrom?: Record<string, number> | null;             // context cards of the last diagram per graph, when it has this scope
+  cut?: boolean;                                         // the last diagram left concepts out at its display limit
+  pending?: boolean;                                     // the settings differ from those the diagram was compiled with
 };
+
+// What hops and direction can change (docs/visualizer.md, Sidebar). A view that starts from levels has every
+// concept of those levels already; only a link into a linked graph is left to follow, one hop deep, since a
+// linked graph's concept is never followed further. A reason string disables the control.
+export function reachOf(s: Selection, graphs: GraphEntry[]): { hops?: string; direction?: string; note?: string; hopOptions: number[]; hopsValue: number } {
+  const linked = s.context.filter((c) => !c.startsWith('upper/') && graphs.some((g) => g.path === c));
+  if (s.seeds.length) {
+    return { hopOptions: [0, 1, 2, 3], hopsValue: s.hops, ...(s.hops === 0 ? { direction: 'With 0 hops no link is followed, so the direction changes nothing.' } : {}) };
+  }
+  if (!linked.length) {
+    const why = 'Every concept of the ticked levels is a start already, and no linked graph is read for links to reach: hops and direction change nothing. Add a linked graph, or start from chosen concepts.';
+    return { hops: why, direction: why, hopOptions: [0, 1, 2, 3], hopsValue: s.hops };
+  }
+  return { hopOptions: [0, 1], hopsValue: Math.min(s.hops, 1),
+           ...(s.hops === 0 ? { direction: 'With 0 hops no link is followed, so the direction changes nothing.' }
+                            : { note: 'Starting from levels: 1 hop draws the concepts of linked graphs your concepts link to; more hops reach no further.' }) };
+}
 
 const versionName = (v: string) => (v === WORKING ? 'working graphs' : `release ${v}`);
 
@@ -43,7 +63,8 @@ export function Sidebar(p: Props) {
   const own = p.graphs.filter((g) => g.own && versionOf(g) === version);
   const rows = contextRows(p.graphs);
   const kindFacts = new Map(p.facts?.kinds.map((k) => [k.kind, k]) ?? []);
-  const byLevel = s.seeds.length === 0 && s.levels.length > 0;
+  const ownLevels = new Set(p.graphs.filter((g) => s.primary.includes(g.path)).map((g) => g.level).filter(Boolean));
+  const reach = reachOf(s, p.graphs);
   return (
     <nav className="sidebar" aria-label="view settings">
       <label>Owner{' '}
@@ -71,48 +92,42 @@ export function Sidebar(p: Props) {
                 onChange={() => set({ primary: toggle(s.primary, g.path) })} /> {g.path}{g.level ? ` [${g.level}]` : ''}</label>
             ))}
           </fieldset>
-          <fieldset><legend>Context</legend>
-            <p className="muted">Read for definitions, labels and the targets of links; one version of each graph.</p>
-            {rows.map((r) => {
-              const chosen = r.versions.find((g) => s.context.includes(g.path));
-              const tag = r.level ? ` [${r.level}]` : '';
-              if (r.versions.length === 1) {
-                const g = r.versions[0];
-                return (
-                  <label key={r.base} className="row"><input type="checkbox" checked={!!chosen}
-                    onChange={() => set({ context: withContext(p.graphs, s.context, r.base, chosen ? null : g.path) })} /> {g.path}{tag}</label>
-                );
-              }
-              return (
-                <label key={r.base} className="row">{r.base}{tag}{' '}
-                  <select aria-label={`version of ${r.base}`} value={chosen?.path ?? ''}
-                    onChange={(e) => set({ context: withContext(p.graphs, s.context, r.base, e.target.value || null) })}>
-                    <option value="">not read</option>
-                    {r.versions.map((g) => <option key={g.path} value={g.path}>{g.release ? `release ${g.release}` : 'working'}</option>)}
-                  </select></label>
-              );
-            })}
-          </fieldset>
-          <form onSubmit={(e) => { e.preventDefault(); if (q.trim()) p.onSearch(q.trim()); }}>
-            <label>Find concepts <input value={q} onChange={(e) => setQ(e.target.value)} aria-label="search" placeholder="label or definition" /></label>
-            <button type="submit" disabled={!s.primary.length || p.searching}>Search</button>
-          </form>
-          {p.hits.length > 0 && (
-            <ul className="hits" aria-label="search results">
-              {p.hits.map((h) => (
-                <li key={h.iri}>
-                  <button type="button" onClick={() => set({ seeds: s.seeds.some((x) => x.iri === h.iri) ? s.seeds : [...s.seeds, { iri: h.iri, label: h.label }] })}>
-                    + {h.label}</button> <span className="tag">{h.level ?? '—'}</span>{h.context && <span className="tag">context</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-          <fieldset><legend>Starting concepts</legend>
-            {s.seeds.length === 0 && <p className="muted">None: pick a level below, or search.</p>}
+          <fieldset aria-label="start from"><legend>Start from</legend>
+            {!s.seeds.length
+              ? <p className="muted">Every concept of the ticked levels in the graphs above{s.seeds.length ? '' : '; or search for concepts to start from them instead'}.</p>
+              : <p className="muted">These concepts; the levels below only say where their links may lead.</p>}
+            <form onSubmit={(e) => { e.preventDefault(); if (q.trim()) p.onSearch(q.trim()); }}>
+              <label>Find concepts <input value={q} onChange={(e) => setQ(e.target.value)} aria-label="search" placeholder="label or definition" /></label>
+              <button type="submit" disabled={!s.primary.length || p.searching}>Search</button>
+            </form>
+            {p.hits.length > 0 && (
+              <ul className="hits" aria-label="search results">
+                {p.hits.map((h) => (
+                  <li key={h.iri}>
+                    <button type="button" onClick={() => set({ seeds: s.seeds.some((x) => x.iri === h.iri) ? s.seeds : [...s.seeds, { iri: h.iri, label: h.label }] })}>
+                      + {h.label}</button> <span className="tag">{h.level ?? '—'}</span>{h.context && <span className="tag">context</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
             {s.seeds.map((x) => (
               <span key={x.iri} className="chip">{x.label} <button type="button" aria-label={`remove ${x.label}`}
                 onClick={() => set({ seeds: s.seeds.filter((y) => y.iri !== x.iri) })}>×</button></span>
             ))}
+            <div className="sub" aria-label="levels">{!s.seeds.length ? 'Levels' : `Links may lead to levels${s.levels.length ? '' : ' (none ticked: every level)'}`}</div>
+            {p.levels.map((lv) => {
+              const own = ownLevels.has(lv);
+              const why = !ownLevels.size ? null
+                : !s.seeds.length && !own ? 'no ticked graph is at this level: only lets links reach linked graphs’ concepts of it'
+                : null;
+              return (
+                <label key={lv} className={`row${why ? ' muted' : ''}`}><input type="checkbox" aria-label={lv} checked={s.levels.includes(lv)}
+                  onChange={() => set({ levels: toggle(s.levels, lv) })} /> {lv}{why && <span className="why"> — {why}</span>}</label>
+              );
+            })}
+            {s.levels.length > 0 && !!p.filteredByLevel && (
+              <p className="hint" aria-label="filtered by level">{p.filteredByLevel} linked concept(s) are at levels not ticked here, so they are not shown.</p>
+            )}
           </fieldset>
           {s.excluded.length > 0 && (
             <fieldset><legend>Hidden</legend>
@@ -122,16 +137,7 @@ export function Sidebar(p: Props) {
               ))}
             </fieldset>
           )}
-          <fieldset><legend>Levels</legend>
-            {p.levels.map((lv) => (
-              <label key={lv} className="row"><input type="checkbox" checked={s.levels.includes(lv)}
-                onChange={() => set({ levels: toggle(s.levels, lv) })} /> {lv}</label>
-            ))}
-            {s.levels.length > 0 && !!p.filteredByLevel && (
-              <p className="hint" aria-label="filtered by level">{p.filteredByLevel} linked concept(s) are at levels not ticked here, so they are not shown.</p>
-            )}
-          </fieldset>
-          <fieldset><legend>Relationships</legend>
+          <fieldset aria-label="follow links"><legend>Follow links</legend>
             {KINDS.map(([k, name]) => {
               const f = kindFacts.get(k);
               const none = f && f.inScope === 0 && f.outside === 0;
@@ -151,30 +157,64 @@ export function Sidebar(p: Props) {
                 {o.instead && s.primary.includes(o.instead) && `, another version of ${o.instead}, which this view reads`}
                 {o.graph && o.available && !(o.instead && s.primary.includes(o.instead)) && (
                   <> <button type="button" onClick={() => set({ context: withContext(p.graphs, s.context, o.graph!.split('@')[0], o.graph) })}>
-                    {o.instead ? `read it instead of ${o.instead}` : 'add it as context'}</button></>
+                    {o.instead ? `read it instead of ${o.instead}` : 'add it as a linked graph'}</button></>
                 )}
               </p>
             ))}
+            <label className={`row${reach.hops ? ' muted' : ''}`}>Hops <select value={reach.hopsValue} disabled={!!reach.hops}
+                onChange={(e) => set({ hops: Number(e.target.value) })} aria-label="hops">
+              {reach.hopOptions.map((h) => <option key={h} value={h}>{h}</option>)}</select></label>{' '}
+            <label className={`row${reach.direction ? ' muted' : ''}`}>Direction <select value={s.direction} disabled={!!reach.direction}
+                onChange={(e) => set({ direction: e.target.value as Selection['direction'] })} aria-label="direction">
+              <option value="both">both</option><option value="forward">outgoing</option><option value="reverse">incoming</option></select></label>
+            {(reach.hops || reach.direction || reach.note) &&
+              <p className="hint" aria-label="reach note">{reach.hops ?? reach.direction ?? reach.note}</p>}
           </fieldset>
-          <label>Hops <select value={s.hops} onChange={(e) => set({ hops: Number(e.target.value) })} aria-label="hops">
-            {[0, 1, 2, 3].map((h) => <option key={h} value={h}>{h}</option>)}</select></label>{' '}
-          <label>Direction <select value={s.direction} onChange={(e) => set({ direction: e.target.value as Selection['direction'] })} aria-label="direction">
-            <option value="both">both</option><option value="forward">outgoing</option><option value="reverse">incoming</option></select></label>
-          {byLevel && <p className="hint" aria-label="hops note">Starting from levels: every concept of the ticked levels in your graphs is a starting concept already, so hops and direction only reach concepts of context graphs.</p>}
-          <label>Layout <select value={s.layout.direction} aria-label="orientation"
-                  onChange={(e) => set({ layout: { ...s.layout, direction: e.target.value as Selection['layout']['direction'] } })}>
-            <option value="RIGHT">left to right</option><option value="LEFT">right to left</option>
-            <option value="DOWN">top to bottom</option><option value="UP">bottom to top</option></select></label>
-          <label>Show up to <select value={s.layout.maxNodes} aria-label="node limit"
-                  onChange={(e) => { const n = Number(e.target.value);       // edges grow with nodes, never shrink here
-                    set({ layout: { ...s.layout, maxNodes: n, maxEdges: Math.max(s.layout.maxEdges, Math.min(400, 2 * n)) } }); }}>
-            {[...new Set([40, 80, 120, 160, 200, s.layout.maxNodes])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n}</option>)}
-          </select> nodes and <select value={s.layout.maxEdges} aria-label="edge limit"
-                  onChange={(e) => set({ layout: { ...s.layout, maxEdges: Number(e.target.value) } })}>
-            {[...new Set([80, 160, 240, 320, 400, s.layout.maxEdges])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n}</option>)}
-          </select> edges</label>
-          <label>Labels <select value={s.languages.join(',')} onChange={(e) => set({ languages: e.target.value.split(',') })} aria-label="languages">
-            <option value="en,ru">English first</option><option value="ru,en">Russian first</option></select></label>
+          <fieldset aria-label="linked graphs"><legend>Linked graphs</legend>
+            <p className="muted">Not a start: a concept of a linked graph is drawn only where a followed link reaches it{s.hops === 0 ? ', and with 0 hops none is' : ''}.</p>
+            {rows.map((r) => {
+              const chosen = r.versions.find((g) => s.context.includes(g.path));
+              const tag = r.level ? ` [${r.level}]` : '';
+              const upper = r.base.startsWith('upper/');
+              const shown = chosen && p.shownFrom ? p.shownFrom[chosen.path] ?? 0 : null;
+              const effect = upper ? <span className="why"> — its classes are category tags on cards, never cards</span>
+                : shown !== null ? <span className="tag" aria-label={`shown from ${r.base}`}>{shown ? `${shown} shown` : p.cut ? 'none shown: the display limit was reached first' : 'none shown'}</span> : null;
+              if (r.versions.length === 1) {
+                const g = r.versions[0];
+                return (
+                  <label key={r.base} className="row"><input type="checkbox" checked={!!chosen}
+                    onChange={() => set({ context: withContext(p.graphs, s.context, r.base, chosen ? null : g.path) })} /> {g.path}{tag}{effect}</label>
+                );
+              }
+              return (
+                <label key={r.base} className="row">{r.base}{tag}{' '}
+                  <select aria-label={`version of ${r.base}`} value={chosen?.path ?? ''}
+                    onChange={(e) => set({ context: withContext(p.graphs, s.context, r.base, e.target.value || null) })}>
+                    <option value="">not read</option>
+                    {r.versions.map((g) => <option key={g.path} value={g.path}>{g.release ? `release ${g.release}` : 'working'}</option>)}
+                  </select>{effect}</label>
+              );
+            })}
+          </fieldset>
+          <fieldset aria-label="display"><legend>Display</legend>
+            <label className="row">Layout <select value={s.layout.direction} aria-label="orientation"
+                    onChange={(e) => set({ layout: { ...s.layout, direction: e.target.value as Selection['layout']['direction'] } })}>
+              <option value="RIGHT">left to right</option><option value="LEFT">right to left</option>
+              <option value="DOWN">top to bottom</option><option value="UP">bottom to top</option></select>
+              <span className="why"> — applies at once</span></label>
+            <label className="row">Labels <select value={s.languages.join(',')} onChange={(e) => set({ languages: e.target.value.split(',') })} aria-label="languages">
+              <option value="en,ru">English first</option><option value="ru,en">Russian first</option></select></label>
+            <label className="row">Show up to <select value={s.layout.maxNodes} aria-label="node limit"
+                    onChange={(e) => { const n = Number(e.target.value);       // edges grow with nodes, never shrink here
+                      set({ layout: { ...s.layout, maxNodes: n, maxEdges: Math.max(s.layout.maxEdges, Math.min(400, 2 * n)) } }); }}>
+              {[...new Set([40, 80, 120, 160, 200, s.layout.maxNodes])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n}</option>)}
+            </select> nodes and <select value={s.layout.maxEdges} aria-label="edge limit"
+                    onChange={(e) => set({ layout: { ...s.layout, maxEdges: Number(e.target.value) } })}>
+              {[...new Set([80, 160, 240, 320, 400, s.layout.maxEdges])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n}</option>)}
+            </select> edges</label>
+            <p className="muted">These choose no concepts; the limits only cut a list that does not fit.</p>
+          </fieldset>
+          {p.pending && <p className="hint pending" aria-label="pending">Settings changed since this diagram: show it again to apply them.</p>}
           <button type="button" className="primary" onClick={p.onCompile}
                   disabled={p.busy || !s.primary.length || !s.kinds.length || (!s.seeds.length && !s.levels.length)}>
             {p.busy ? 'Compiling…' : 'Show diagram'}</button>

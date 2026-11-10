@@ -275,6 +275,12 @@ export function App() {
     [apply, sel, extra]);
 
   const counts = compilation?.diagram.counts;
+  const current = buildSpec(sel, extra);
+  const sameScope = !!compilation && scopeKey(compilation.manifest.requested) === scopeKey(current.scope);
+  const sameSelection = !!compiledSpec && JSON.stringify([compiledSpec.scope, compiledSpec.selection]) === JSON.stringify([current.scope, current.selection]);
+  // orientation is drawn at once; everything else in the sidebar takes a compile
+  const pending = !!compiledSpec && !busy && (!sameSelection || JSON.stringify(drawn(compiledSpec)) !== JSON.stringify(drawn(current)));
+  const shownFrom = sameScope ? contextCards(compilation!) : null;
   return (
     <div className="app">
       <header>
@@ -317,9 +323,9 @@ export function App() {
         <Sidebar owners={catalog?.owners ?? []} owner={owner} onOwner={chooseOwner} graphs={ownerCat?.graphs ?? []}
                  levels={ownerCat?.levels ?? []} sel={sel} onChange={setSel} onSearch={search} hits={hits}
                  searching={searching} onCompile={compile} busy={busy} onUnhide={unhide}
-                 facts={compilation && scopeKey(compilation.manifest.requested) === scopeKey(buildSpec(sel).scope) ? compilation.scopeFacts : null}
-                 filteredByLevel={compiledSpec && JSON.stringify([compiledSpec.scope, compiledSpec.selection]) === JSON.stringify([buildSpec(sel).scope, buildSpec(sel).selection])
-                   ? compilation?.diagram.counts.filteredByLevel : undefined}
+                 facts={sameScope ? compilation!.scopeFacts : null}
+                 filteredByLevel={sameSelection ? compilation?.diagram.counts.filteredByLevel : undefined}
+                 shownFrom={shownFrom} cut={!!counts?.omittedNodes} pending={pending}
                  onOverview={(v) => void overview(v)}>
           {owner && catalog?.planner.enabled && sel.primary.length > 0 &&
             <Ask onAsk={(q) => void ask(q)} busy={busy} candidates={candidates}
@@ -393,6 +399,19 @@ function Ask({ onAsk, busy, candidates, onPick }: { onAsk: (q: string) => void; 
       ))}
     </fieldset>
   );
+}
+
+// What a compile takes from the spec apart from the scope and selection: labels, limits, groups and notes.
+function drawn(spec: ReturnType<typeof buildSpec>) {
+  const { direction: _d, ...rest } = spec.presentation;
+  return [rest, spec.groups, spec.summaries, spec.annotations];
+}
+
+// The cards of each linked (context) graph in a diagram.
+function contextCards(c: Compilation): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const n of c.diagram.nodes) if (n.context && n.graph) out[n.graph] = (out[n.graph] ?? 0) + 1;
+  return out;
 }
 
 export const NODE_LIMITS = [40, 80, 120, 160, 200];
