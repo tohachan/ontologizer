@@ -143,7 +143,8 @@ it('the overview takes the service\'s spec and compiles it on the snapshot it re
     groups: [{ id: 'g-p', title: 'projects/p', members: ['urn:sample:Item'], collapsed: true }], summaries: [], annotations: [],
     presentation: { languages: ['en', 'ru'], direction: 'RIGHT', maxNodes: 200, maxEdges: 400, preset: 'domain' },
   };
-  routes['POST /overview'] = () => ({ body: { spec, snapshotId: 'snap-ov', mappingTargets: { 'shared/domain@0.1': 3 } } });
+  routes['POST /overview'] = () => ({ body: { spec: { ...spec, scope: { ...spec.scope, contextGraphs: ['kit/core', 'other/task@0.2', 'upper/gufo'] } },
+    snapshotId: 'snap-ov', mappingTargets: { 'shared/domain@0.1': 3, 'other/task@0.2': 2 } } });
   render(<App />);
   const owner = await screen.findByLabelText('owner');
   await waitFor(() => expect(within(owner).getByText('study')).toBeTruthy());
@@ -154,7 +155,9 @@ it('the overview takes the service\'s spec and compiles it on the snapshot it re
   const sent = calls.find((c) => c.path === '/compile')!.body as { spec: typeof spec; snapshotId: string };
   expect(sent.snapshotId).toBe('snap-ov');
   expect(sent.spec.groups).toEqual(spec.groups);
+  const said = screen.getAllByRole('status').map((x) => x.textContent).join(' ');
+  expect(said).toContain('other/task@0.2 read for the targets of mappings');
+  expect(said).toContain('mappings into shared/domain@0.1 stay outside');
   expect(sent.spec.title).toBe('Overview of study');
-  expect(screen.getAllByRole('status').some((s) => s.textContent?.includes('shared/domain@0.1 read for the targets of mappings'))).toBe(true);
   expect((screen.getByLabelText('domain') as HTMLInputElement).checked).toBe(true);
 });

@@ -83,3 +83,10 @@ describe('orientation', () => {
     expect(seen).toEqual(['DOWN']);
   });
 });
+
+it('a concept card names its graph', () => {
+  const c = compilation('g');
+  c.diagram.nodes[0] = { ...c.diagram.nodes[0], graph: 'projects/orca' };
+  render(<ReactFlowProvider><Canvas compilation={c} picked={[]} onPick={() => {}} engine={() => new Promise(() => {})} /></ReactFlowProvider>);
+  expect(screen.getByLabelText('graph').textContent).toBe('projects/orca');
+});

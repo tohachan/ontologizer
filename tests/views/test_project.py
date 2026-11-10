@@ -311,3 +311,9 @@ def test_a_card_names_its_graph_and_a_group_its_shared_level():
     by = {n.id: n for n in d.nodes}
     assert by["aggregate:g"].level == "domain" and by["area:h"].level == "task"
     assert {n.label: n.graph for n in d.nodes if n.kind == "concept"} == {"S": "shared/domain"}
+
+
+def test_filtered_by_level_counts_only_the_level_filter_not_hidden_intermediates():
+    ents = [entity("A"), entity("B", level="task"), entity("C")]
+    d = compile_view(spec(selection={"levels": ["domain"]}), scope(), model(ents, [rel("A", "B"), rel("A", "C")]))
+    assert d.counts.filtered_by_level == 1 and d.counts.hidden_by_rule == 1

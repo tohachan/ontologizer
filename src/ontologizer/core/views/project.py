@@ -77,6 +77,7 @@ class Counts:
     hidden_by_rule: int            # entities filtered by level or hidden inside a summary
     omitted_nodes: int             # dropped by the display budget
     omitted_edges: int
+    filtered_by_level: int = 0     # of hidden_by_rule: reached, but at a level the view does not select
 
 
 @dataclass(frozen=True)
@@ -340,4 +341,4 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
                         counts=Counts(shown_nodes=len(nodes),                      # every emitted node, notes too
                                       shown_edges=len(edges), boundary=len(boundary), excluded=len(excluded_seen),
                                       hidden_by_rule=len(filtered | hidden), omitted_nodes=omitted,
-                                      omitted_edges=omitted_edges))
+                                      omitted_edges=omitted_edges, filtered_by_level=len(filtered - hidden)))

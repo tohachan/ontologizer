@@ -38,6 +38,7 @@ export function App() {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [compilation, setCompilation] = useState<Compilation | null>(null);   // the last valid diagram
+  const [compiledSpec, setCompiledSpec] = useState<ReturnType<typeof buildSpec> | null>(null);   // what it was compiled from
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [limitHit, setLimitHit] = useState<{ count: number; limit: number } | null>(null);
@@ -111,7 +112,7 @@ export function App() {
       }
       if (mine !== request.current) return null;               // a newer request owns the canvas
       snapshot.current = { key, id: c.snapshotId };
-      setCompilation(c);
+      setCompilation(c); setCompiledSpec(spec);
       const labels = new Map(c.diagram.nodes.filter((n) => n.kind === 'concept').map((n) => [n.members[0], n.label]));
       if (s.seeds.some((x) => labels.has(x.iri) && labels.get(x.iri) !== x.label)) {
         setSel((cur) => ({ ...cur, seeds: cur.seeds.map((x) => ({ ...x, label: labels.get(x.iri) ?? x.label })) }));
@@ -208,8 +209,12 @@ export function App() {
       setOpened({ id: 'untitled', title: r.spec.title, revision: null }); setInitialLayout(null); setCanvasKey((k) => k + 1);
       const c = await compileWith(s, x, { id: 'untitled', title: r.spec.title });
       const shut = x.groups.filter((g) => g.collapsed).length;
+      const targets = Object.keys(r.mappingTargets);
+      const read = targets.filter((g) => r.spec.scope.contextGraphs.includes(g));
+      const left = targets.filter((g) => !read.includes(g));
       if (c) setNotice(`Overview: every level of ${r.spec.scope.primaryGraphs.length} graph(s)` +
-        (Object.keys(r.mappingTargets).length ? `, with ${Object.keys(r.mappingTargets).join(', ')} read for the targets of mappings` : '') +
+        (read.length ? `, with ${read.join(', ')} read for the targets of mappings` : '') +
+        (left.length ? `; mappings into ${left.join(', ')} stay outside, since the view reads another version of that graph` : '') +
         (shut ? `. Each application graph is one group: pick it and choose Expand to see its concepts.` : '.'));
     } catch (e) {
       if (mine === request.current) setError(describe(e));
@@ -310,7 +315,9 @@ export function App() {
                  levels={ownerCat?.levels ?? []} sel={sel} onChange={setSel} onSearch={search} hits={hits}
                  searching={searching} onCompile={compile} busy={busy} onUnhide={unhide}
                  facts={compilation && scopeKey(compilation.manifest.requested) === scopeKey(buildSpec(sel).scope) ? compilation.scopeFacts : null}
-                 hiddenByRule={compilation?.diagram.counts.hiddenByRule} onOverview={(v) => void overview(v)}>
+                 filteredByLevel={compiledSpec && JSON.stringify([compiledSpec.scope, compiledSpec.selection]) === JSON.stringify([buildSpec(sel).scope, buildSpec(sel).selection])
+                   ? compilation?.diagram.counts.filteredByLevel : undefined}
+                 onOverview={(v) => void overview(v)}>
           {owner && catalog?.planner.enabled && sel.primary.length > 0 &&
             <Ask onAsk={(q) => void ask(q)} busy={busy} candidates={candidates}
                  onPick={(iri) => { setCandidates([]); void apply({ ...sel, seeds: [...sel.seeds.filter((x) => x.iri !== iri), { iri, label: iri.split(/[#/:]/).pop() ?? iri }] }, extra); }} />}

@@ -56,3 +56,23 @@ def test_mapping_targets_outside_the_scope_name_their_graphs_and_one_version_win
     in_scope = GraphEntry(path="shared/domain", iri=NS + "shared/domain", role=None, level="domain", owner="s",
                           base="shared/domain", release=None)
     assert context_for([in_scope], wanted, known) == []            # never a second version of a graph in scope
+
+
+def test_group_ids_stay_distinct_and_a_graph_too_large_for_one_group_is_split_not_cut():
+    from ontologizer.core.views.builders import group_id
+    assert group_id("projects/a-b") != group_id("projects/a/b")
+    long = "projects/" + "x" * 80
+    assert group_id(long + "1") != group_id(long + "2") and len(group_id(long + "1")) <= 64
+    big = [entity(f"p{i:04d}", graph=P, level="application") for i in range(501)]
+    spec = overview_spec(scope(primary=(P, Q)), model([*big, entity("q", graph=Q, level="application")], []), LEVELS)
+    parts = [g for g in spec["groups"] if g["title"].startswith("p/one")]
+    assert [g["title"] for g in parts] == ["p/one (part 1 of 2)", "p/one (part 2 of 2)"]
+    assert sum(len(g["members"]) for g in parts) == 501
+    parse(spec)                                                    # ids distinct, every member in one group
+
+
+def test_overview_of_graphs_whose_paths_differ_only_in_punctuation():
+    a, b = NS + "projects/a-b", NS + "projects/a/b"
+    sc = scope(primary=(a, b))
+    m = model([entity("A", graph=a, level="application"), entity("B", graph=b, level="application")], [])
+    assert len({g["id"] for g in overview_spec(sc, m, LEVELS)["groups"]}) == 2

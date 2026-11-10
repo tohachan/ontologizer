@@ -6,6 +6,7 @@ memberships, checked and compiled like one written by hand, and saved the same w
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable, Sequence
 
@@ -36,8 +37,22 @@ def target_graphs(model: SourceModel, scope: Scope, graph_of_term: Callable[[str
     return dict(sorted(out.items()))
 
 
-def group_id(path: str) -> str:
-    return ("g-" + re.sub(r"[^A-Za-z0-9_.-]", "-", path))[:64]
+GROUP_LIMIT = 500                        # members per group (schemas/views/view-spec.v1.json)
+
+
+def group_id(path: str, part: int = 0) -> str:
+    """Readable, bounded, and distinct for distinct paths: a digest of the whole path ends it."""
+    digest = hashlib.sha256(path.encode()).hexdigest()[:12]
+    return f"g-{re.sub(r'[^A-Za-z0-9_.-]', '-', path)[:40]}-{digest}" + (f"-{part}" if part else "")
+
+
+def _parts(path: str, members: list[str], collapsed: bool) -> list[dict]:
+    """A graph larger than one group allows becomes several groups, every concept in one of them."""
+    chunks = [members[i:i + GROUP_LIMIT] for i in range(0, len(members), GROUP_LIMIT)]
+    if len(chunks) == 1:
+        return [{"id": group_id(path), "title": path, "members": chunks[0], "collapsed": collapsed}]
+    return [{"id": group_id(path, n), "title": f"{path} (part {n} of {len(chunks)})", "members": chunk,
+             "collapsed": collapsed} for n, chunk in enumerate(chunks, start=1)]
 
 
 def overview_spec(scope: Scope, model: SourceModel, levels: Sequence[str], *, languages: Sequence[str] = ("en", "ru"),
@@ -56,8 +71,7 @@ def overview_spec(scope: Scope, model: SourceModel, levels: Sequence[str], *, la
     collapse = len(members) > 1 or any(len(m) > ONE_GRAPH_OPEN for m in members.values())
     releases = {g.release for g in scope.primary}
     title = f"Overview of {scope.owner or 'the owner'}" + (f" (release {releases.pop()})" if releases != {None} and len(releases) == 1 else "")
-    groups = [{"id": group_id(path), "title": path, "members": ms[:500], "collapsed": collapse}
-              for path, ms in sorted(members.items())]
+    groups = [g for path, ms in sorted(members.items()) for g in _parts(path, ms, collapse)]
     spec = {
         "schemaVersion": 1, "id": "overview", "title": title[:200],
         "scope": {"primaryGraphs": sorted(g.path for g in scope.primary),

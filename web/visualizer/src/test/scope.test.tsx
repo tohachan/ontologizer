@@ -33,13 +33,13 @@ describe('scope rules', () => {
   });
 });
 
-function Harness({ facts, hidden = 0 }: { facts?: ScopeFacts; hidden?: number }) {
-  const [sel, setSel] = useState(START);
+function Harness({ facts, hidden = 0, start = START }: { facts?: ScopeFacts; hidden?: number; start?: Selection }) {
+  const [sel, setSel] = useState(start);
   return (
     <>
       <Sidebar owners={[{ name: 'me', available: true }]} owner="me" onOwner={() => {}} graphs={GRAPHS}
                levels={['domain', 'application']} sel={sel} onChange={setSel} onSearch={() => {}} hits={[]} searching={false}
-               onCompile={() => {}} busy={false} onUnhide={() => {}} facts={facts} hiddenByRule={hidden} />
+               onCompile={() => {}} busy={false} onUnhide={() => {}} facts={facts} filteredByLevel={hidden} />
       <output aria-label="scope">{JSON.stringify([sel.primary, sel.context])}</output>
     </>
   );
@@ -72,4 +72,19 @@ describe('the scope picker', () => {
     fireEvent.click(screen.getByText('add it as context'));
     expect(scope()[1]).toEqual(['shared/domain@0.2', 'upper/gufo']);
   });
+});
+
+it('keeps a release chosen before any graph is ticked, and offers that version\'s graphs', () => {
+  render(<Harness start={{ ...START, primary: [] }} />);
+  fireEvent.change(screen.getByLabelText('version'), { target: { value: '0.1' } });
+  expect((screen.getByLabelText('version') as HTMLSelectElement).value).toBe('0.1');
+  fireEvent.click(screen.getByLabelText(/projects\/me@0\.1/));
+  expect(scope()[0]).toEqual(['projects/me@0.1']);
+});
+
+it('a catalog with only releases of the owner shows them', () => {
+  const only = GRAPHS.filter((g) => !(g.own && !g.release));
+  render(<Sidebar owners={[]} owner="me" onOwner={() => {}} graphs={only} levels={[]} sel={{ ...START, primary: [] }}
+                  onChange={() => {}} onSearch={() => {}} hits={[]} searching={false} onCompile={() => {}} busy={false} onUnhide={() => {}} />);
+  expect(screen.getByLabelText(/projects\/me@0\.1/)).toBeTruthy();
 });

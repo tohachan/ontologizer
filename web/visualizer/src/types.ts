@@ -41,6 +41,7 @@ export type DEdge = {
 export type Counts = {
   shownNodes: number; shownEdges: number; boundary: number; excluded: number; hiddenByRule: number;
   omittedNodes: number; omittedEdges: number;
+  filteredByLevel?: number;                                // of hiddenByRule: at a level the view does not select
 };
 export type Issue = { code: string; message: string; path: string };
 export type Compilation = {

@@ -22,7 +22,7 @@ type Props = {
   onCompile: () => void; busy: boolean; onUnhide: (iri: string) => void; children?: ReactNode;
   facts?: ScopeFacts | null;                             // of the last diagram, when it has this scope
   onOverview?: (version: string) => void;
-  hiddenByRule?: number;
+  filteredByLevel?: number;                              // of the last diagram, when it has these settings
 };
 
 const versionName = (v: string) => (v === WORKING ? 'working graphs' : `release ${v}`);
@@ -33,10 +33,13 @@ function toggle<T>(list: T[], v: T): T[] {
 
 export function Sidebar(p: Props) {
   const [q, setQ] = useState('');
+  const [chosenVersion, setChosenVersion] = useState<string | null>(null);
   const s = p.sel;
   const set = (patch: Partial<Selection>) => p.onChange({ ...s, ...patch });
   const versions = ownVersions(p.graphs);
-  const version = currentVersion(p.graphs, s.primary);
+  // the version is chosen apart from the graphs, so it holds while none is ticked
+  const version = s.primary.length ? currentVersion(p.graphs, s.primary)
+    : chosenVersion && versions.includes(chosenVersion) ? chosenVersion : versions[0] ?? WORKING;
   const own = p.graphs.filter((g) => g.own && versionOf(g) === version);
   const rows = contextRows(p.graphs);
   const kindFacts = new Map(p.facts?.kinds.map((k) => [k.kind, k]) ?? []);
@@ -60,7 +63,7 @@ export function Sidebar(p: Props) {
           <fieldset><legend>Graphs of this owner</legend>
             {versions.length > 1 && (
               <label className="row">Version <select aria-label="version" value={version}
-                onChange={(e) => set({ primary: switchVersion(p.graphs, s.primary, e.target.value) })}>
+                onChange={(e) => { setChosenVersion(e.target.value); set({ primary: switchVersion(p.graphs, s.primary, e.target.value) }); }}>
                 {versions.map((v) => <option key={v} value={v}>{versionName(v)}</option>)}</select></label>
             )}
             {own.map((g) => (
@@ -124,8 +127,8 @@ export function Sidebar(p: Props) {
               <label key={lv} className="row"><input type="checkbox" checked={s.levels.includes(lv)}
                 onChange={() => set({ levels: toggle(s.levels, lv) })} /> {lv}</label>
             ))}
-            {s.levels.length > 0 && !!p.hiddenByRule && (
-              <p className="hint" aria-label="filtered by level">{p.hiddenByRule} linked concept(s) are at levels not ticked here, so they are not shown.</p>
+            {s.levels.length > 0 && !!p.filteredByLevel && (
+              <p className="hint" aria-label="filtered by level">{p.filteredByLevel} linked concept(s) are at levels not ticked here, so they are not shown.</p>
             )}
           </fieldset>
           <fieldset><legend>Relationships</legend>

@@ -32,6 +32,7 @@ export function ConceptCard({ data, selected }: Props) {
         {n.owlStructure && <span className="tag" title="additional OWL structure not shown">+OWL</span>}
       </div>
       {n.status && <div className="card-status">{statusText(n.status)}</div>}
+      {n.graph && <div className="card-graph" title={n.graph} aria-label="graph">{n.graph}</div>}
     </div>
   );
 }
