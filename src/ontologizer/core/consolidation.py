@@ -264,9 +264,13 @@ def _amend(dec: dict, shared: dict, concepts: dict, frame, name: str) -> tuple[l
         for r in add:
             if tuple(r.split(":")) not in concepts:
                 errs.append(f"amend {ref}: unknown project concept {r}")
-        for r in drop:
+        for r in drop:   # already out (this file applied before): nothing to do, said so
             if r not in have:
-                errs.append(f"amend {ref}: {r} is not in its support")
+                if tuple(r.split(":")) not in concepts:
+                    errs.append(f"amend {ref}: unknown project concept {r}")
+                else:
+                    print(f"amend {ref}: {r} is already out of its support", file=sys.stderr)
+        drop = [r for r in drop if r in have]
         after = [r for r in have if r not in drop] + [r for r in add if r not in have]
         for r in kinds:
             if r not in after:

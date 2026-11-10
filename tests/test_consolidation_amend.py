@@ -40,6 +40,8 @@ def test_amend_changes_only_the_named_fields(study, tmp_path):  # noqa: F811
     # dropping a supporter takes the mapping this step gave it
     assert decide("c", {"amend": [{"ref": "domain:session", "reason": "not it", "drop_support": ["alpha:step"]}]}) == 0
     assert _maps(cfg, "step") == []
+    assert decide("c", {"amend": [{"ref": "domain:session", "reason": "not it", "drop_support": ["alpha:step"]}]}) == 0
+    assert decide("c", {"amend": [{"ref": "domain:session", "reason": "x", "drop_support": ["alpha:none"]}]}) == 1
 
 
 def test_amend_refuses_what_it_cannot_change(study, tmp_path):  # noqa: F811
@@ -49,7 +51,6 @@ def test_amend_refuses_what_it_cannot_change(study, tmp_path):  # noqa: F811
     assert decide("b", {"amend": [{"ref": "domain:session", "reason": "r", "def": "other"}]}) == 1     # restate it
     assert decide("b", {"amend": [{"ref": "domain:nothing", "reason": "r", "alt": []}]}) == 1
     assert decide("b", {"amend": [{"ref": "domain:session", "reason": "r"}]}) == 1                     # nothing
-    assert decide("b", {"amend": [{"ref": "domain:session", "reason": "r", "drop_support": ["alpha:step"]}]}) == 1
     assert decide("b", {"amend": [{"ref": "domain:session", "reason": "r", "drop_support": ["alpha:session"]}]}) == 1
     assert decide("b", {"amend": [{"ref": "domain:session", "reason": "r", "add_support": ["alpha:none"]}]}) == 1
     assert decide("b", {"new_domain": [new("session")],
