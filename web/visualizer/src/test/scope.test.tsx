@@ -12,10 +12,10 @@ const g = (path: string, own: boolean, level: string | null = null, owner: strin
 const GRAPHS = [
   g('projects/me', true, 'application'), g('projects/me@0.1', true, 'application'),
   g('shared/domain', false, 'domain'), g('shared/domain@0.1', false, 'domain'), g('shared/domain@0.2', false, 'domain'),
-  g('upper/gufo', false, null, null),
+  g('upper/gufo', false, null, null), g('kit/core', false, null, null),
 ];
 const START: Selection = {
-  primary: ['projects/me'], context: ['upper/gufo'], languages: ['en'], seeds: [], excluded: [], levels: ['application'],
+  primary: ['projects/me'], context: ['kit/core', 'upper/gufo'], languages: ['en'], seeds: [], excluded: [], levels: ['application'],
   kinds: ['kit-relation', 'kit-mapping'], hops: 1, direction: 'both', types: [],
   layout: { direction: 'RIGHT', maxNodes: 80, maxEdges: 160, preset: 'domain' },
 };
@@ -26,7 +26,7 @@ describe('scope rules', () => {
       .toEqual(['shared/domain@0.2', 'upper/gufo']);
     expect(withContext(GRAPHS, ['shared/domain@0.1'], 'shared/domain', null)).toEqual([]);
     expect(contextRows(GRAPHS).map((r) => [r.base, r.versions.map((v) => v.release)]))
-      .toEqual([['upper/gufo', [null]], ['shared/domain', [null, '0.1', '0.2']]]);
+      .toEqual([['kit/core', [null]], ['upper/gufo', [null]], ['shared/domain', [null, '0.1', '0.2']]]);
   });
   it('moves the owner graphs to another version together', () => {
     expect(switchVersion(GRAPHS, ['projects/me'], '0.1')).toEqual(['projects/me@0.1']);
@@ -54,7 +54,7 @@ describe('the scope picker', () => {
     expect(scope()[0]).toEqual(['projects/me@0.1']);
     fireEvent.change(screen.getByLabelText('version of shared/domain'), { target: { value: 'shared/domain' } });
     fireEvent.change(screen.getByLabelText('version of shared/domain'), { target: { value: 'shared/domain@0.2' } });
-    expect(scope()[1]).toEqual(['shared/domain@0.2', 'upper/gufo']);
+    expect(scope()[1]).toEqual(['kit/core', 'shared/domain@0.2', 'upper/gufo']);
   });
 
   it('says what each kind holds, where links point outside, and adds that graph', () => {
@@ -72,7 +72,7 @@ describe('the scope picker', () => {
     expect((screen.getByLabelText('hops') as HTMLSelectElement).disabled).toBe(true);
     expect(screen.getByLabelText('reach note').textContent).toContain('change nothing');
     fireEvent.click(screen.getByText('add it as a linked graph'));
-    expect(scope()[1]).toEqual(['shared/domain@0.2', 'upper/gufo']);
+    expect(scope()[1]).toEqual(['kit/core', 'shared/domain@0.2', 'upper/gufo']);
     // with a linked graph, one hop is all a level view can follow
     const hops = screen.getByLabelText('hops') as HTMLSelectElement;
     expect(hops.disabled).toBe(false);
@@ -88,6 +88,7 @@ describe('the scope picker', () => {
     expect(screen.getByLabelText('application').closest('label')!.textContent).not.toContain('no ticked graph');
     expect(screen.getByLabelText('shown from shared/domain').textContent).toBe('4 shown');
     expect(screen.getByLabelText(/upper\/gufo/).closest('label')!.textContent).toContain('category tags');
+    expect(screen.getByLabelText(/kit\/core/).closest('label')!.textContent).toContain('never cards');
     expect(screen.getByLabelText('pending').textContent).toContain('show it again');
   });
 

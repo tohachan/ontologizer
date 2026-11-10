@@ -370,7 +370,7 @@ The sidebar is in blocks, so it is visible which settings choose concepts and wh
 - **Graphs of this owner.** The primary graphs.
 - **Start from.** Either every concept of the ticked levels, or the concepts added from search. A level that no ticked graph has is marked: it only lets links reach the linked graphs' concepts of that level. With chosen concepts, the levels only limit where links lead.
 - **Follow links.** Relationship kinds, hops and direction. A linked graph's concept is never followed further, so a view started from levels offers 0 or 1 hop. Without a linked graph to reach, hops and direction are disabled, and with 0 hops the direction is disabled.
-- **Linked graphs** (the context). These are not a start: their concepts appear only where a followed link reaches them. Each row shows how many cards it gave the last diagram, while the scope is unchanged. An `upper/` graph gives category tags, never cards.
+- **Linked graphs** (the context). These are not a start: their concepts appear only where a followed link reaches them. Each row shows how many cards it gave the last diagram, while the scope is unchanged. An `upper/` graph gives category tags, and `kit/core` gives types and relation names; neither ever gives a card, and neither counts as something for hops to reach.
 - **Display.** Orientation, which applies at once; labels; and the display limits. None of these chooses concepts.
 
 When the settings differ from those the diagram was compiled with, the sidebar says so above Show diagram.

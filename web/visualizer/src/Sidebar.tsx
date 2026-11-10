@@ -28,11 +28,19 @@ type Props = {
   pending?: boolean;                                     // the settings differ from those the diagram was compiled with
 };
 
+// The kit's vocabulary and the upper ontology are read for what they say about the cards, never drawn as cards
+// (core/views/reader.py drops the kit's own IRIs; project.py turns upper classes into category tags).
+const vocabulary = (path: string) => path.startsWith('upper/') || path.startsWith('kit/');
+const VOCABULARY_NOTE: Record<string, string> = {
+  upper: ' — its classes are category tags on cards, never cards',
+  kit: ' — the kit\u2019s own vocabulary: read for types and relation names, never cards',
+};
+
 // What hops and direction can change (docs/visualizer.md, Sidebar). A view that starts from levels has every
 // concept of those levels already; only a link into a linked graph is left to follow, one hop deep, since a
 // linked graph's concept is never followed further. A reason string disables the control.
 export function reachOf(s: Selection, graphs: GraphEntry[]): { hops?: string; direction?: string; note?: string; hopOptions: number[]; hopsValue: number } {
-  const linked = s.context.filter((c) => !c.startsWith('upper/') && graphs.some((g) => g.path === c));
+  const linked = s.context.filter((c) => !vocabulary(c) && graphs.some((g) => g.path === c));
   if (s.seeds.length) {
     return { hopOptions: [0, 1, 2, 3], hopsValue: s.hops, ...(s.hops === 0 ? { direction: 'With 0 hops no link is followed, so the direction changes nothing.' } : {}) };
   }
@@ -175,9 +183,9 @@ export function Sidebar(p: Props) {
             {rows.map((r) => {
               const chosen = r.versions.find((g) => s.context.includes(g.path));
               const tag = r.level ? ` [${r.level}]` : '';
-              const upper = r.base.startsWith('upper/');
+              const vocab = vocabulary(r.base) ? VOCABULARY_NOTE[r.base.split('/')[0]] : null;
               const shown = chosen && p.shownFrom ? p.shownFrom[chosen.path] ?? 0 : null;
-              const effect = upper ? <span className="why"> — its classes are category tags on cards, never cards</span>
+              const effect = vocab ? <span className="why">{vocab}</span>
                 : shown !== null ? <span className="tag" aria-label={`shown from ${r.base}`}>{shown ? `${shown} shown` : p.cut ? 'none shown: the display limit was reached first' : 'none shown'}</span> : null;
               if (r.versions.length === 1) {
                 const g = r.versions[0];
