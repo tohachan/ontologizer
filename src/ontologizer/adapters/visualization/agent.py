@@ -137,6 +137,8 @@ class AgentSession:
     proc: subprocess.Popen | None = None
     stopping: threading.Event = field(default_factory=threading.Event)
     turns: int = 0
+    # the page's model and effort (§7), kept for the following turns; a key absent: the harness's default
+    choice: dict = field(default_factory=dict)
 
     @property
     def cwd(self) -> Path:
@@ -208,10 +210,37 @@ class AgentService:
         out = []
         for name, h in self.harnesses.items():
             installed = self._exe(h) is not None
+            c = h.choices()
             out.append({"name": name, "installed": installed,
                         "signedIn": installed and self.signed_in(name),
-                        "version": self.version(name) if installed else None})
+                        "version": self.version(name) if installed else None,
+                        "models": [dict(m) for m in c.models], "defaultModel": c.default_model,
+                        "efforts": list(c.efforts), "defaultEffort": c.default_effort})
         return {"harnesses": out}
+
+    # ---- the page's model and effort (§7) ---------------------------------------------------
+    @staticmethod
+    def agent_choice(h: Harness, agent) -> dict:
+        """The chat request's `agent: {model, effort}`, checked against the harness's listed choices: only
+        a listed id reaches a command line. `default` or null is the harness's own choice (no flag); a key
+        the request leaves out is not changed."""
+        if agent is None:
+            return {}
+        if not isinstance(agent, dict):
+            raise ApiError(400, "bad-request", "agent must be an object: {model, effort}")
+        c, out = h.choices(), {}
+        if "model" in agent:
+            m = agent["model"]
+            ids = [x["id"] for x in c.models]
+            if m is not None and m != "default" and m not in ids:
+                raise ApiError(400, "unknown-model", f"{h.name} has no model {m!r} here; one of {ids}")
+            out["model"] = "default" if m is None else m
+        if "effort" in agent:
+            e = agent["effort"]
+            if e is not None and e != "default" and e not in c.efforts:
+                raise ApiError(400, "unknown-effort", f"{h.name} has no effort {e!r}; one of {list(c.efforts)}")
+            out["effort"] = "default" if e is None else e
+        return out
 
     # ---- sessions -------------------------------------------------------------------
     def _sweep(self) -> None:
@@ -303,6 +332,7 @@ class AgentService:
         view = payload.get("view")
         if view is not None and not isinstance(view, dict):
             raise ApiError(400, "bad-request", "view must be an object")
+        choice = self.agent_choice(self.harnesses[s.harness], payload.get("agent"))
         if not s.busy.acquire(blocking=False):
             raise ApiError(409, "turn-in-progress", "this session is still answering; stop it or wait")
         try:
@@ -310,6 +340,7 @@ class AgentService:
                 setter = getattr(s.view, "set_current", None)          # the view tools normalise it (ONTO-44)
                 if setter: setter(view)
                 else: s.view.current = view
+            s.choice.update(choice)                    # this turn and the following ones
             s.stopping.clear()
             s.last_used = self.clock()
         except BaseException:
@@ -335,8 +366,21 @@ class AgentService:
     def _turn(self, s: AgentSession, prompt: str) -> Iterator[dict | None]:
         """The turn's chunks; None now and then while the harness is quiet (a heartbeat)."""
         h = self.harnesses[s.harness]
+        model, effort = s.choice.get("model"), s.choice.get("effort")     # None: the harness's configured one
+        c = h.choices()
+        requested = model if model is not None else c.default_model
+        requested = None if requested in (None, "default") else requested
+        told = False
+
+        def metadata(reported=None) -> dict:
+            # §7: the model the harness reports, else the one requested, else null; merged into the message
+            nonlocal told
+            told = True
+            return {"type": "message-metadata", "messageMetadata": {"harness": s.harness, "model": reported or requested}}
         yield {"type": "start", "messageId": f"msg-{uuid.uuid4().hex}"}
         yield {"type": "start-step"}
+        if not getattr(h, "reports_model", False):
+            yield metadata()
         s.turns += 1
         scratch = s.root / f"turn-{s.turns}"
         scratch.mkdir(mode=0o700)
@@ -350,7 +394,7 @@ class AgentService:
                 return
             launch = h.launch(Turn(prompt=prompt, mcp_url=f"{self.mcp_origin}/visualizer/mcp/{s.id}",
                                    secret=s.view.secret, instructions=self.instructions, resume=s.resume,
-                                   workdir=s.cwd, scratch=scratch))
+                                   workdir=s.cwd, scratch=scratch, model=model, effort=effort))
             conv = h.converter()
             proc = subprocess.Popen([exe, *launch.argv[1:]], cwd=s.cwd, env=self.env(launch.env),
                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -403,7 +447,10 @@ class AgentService:
                     continue
                 if not isinstance(event, dict):
                     continue
-                for chunk in conv.feed(event):
+                chunks = conv.feed(event)
+                if not told and getattr(conv, "model", None):          # Claude: right after system/init
+                    yield metadata(conv.model)
+                for chunk in chunks:
                     yield chunk
                     if chunk["type"] in ("tool-output-available", "tool-output-error"):
                         yield from self._drain(s)
@@ -421,6 +468,8 @@ class AgentService:
                 s.resume = conv.resume_id
             yield from conv.close()
             yield from self._drain(s)
+            if not told:                                 # the harness never said which model it ran
+                yield metadata()
             if s.stopping.is_set():
                 yield {"type": "abort", "reason": "stopped"}
                 return

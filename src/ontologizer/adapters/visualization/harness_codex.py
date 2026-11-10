@@ -32,8 +32,9 @@ import os
 import re
 import uuid
 
-from ontologizer.adapters.visualization.harness_base import bare_tool_name, toml_value, tool_output, which
-from ontologizer.ports.view_agent import MCP_SERVER, VIEW_TOOLS, Launch, LoginScreen, Turn
+from ontologizer.adapters.visualization.harness_base import (DEFAULT, bare_tool_name, choices, safe_id, toml_value,
+                                                             tool_output, which)
+from ontologizer.ports.view_agent import MCP_SERVER, VIEW_TOOLS, Choices, Launch, LoginScreen, Turn
 
 TOKEN_ENV = "ONTOLOGIZER_VIEW_MCP_TOKEN"
 # Features of codex 0.166 that give the model tools beyond the view server's (`codex features list`).
@@ -45,6 +46,9 @@ DISABLED = ("shell_tool", "unified_exec", "unified_exec_tty", "shell_snapshot", 
 _URL = re.compile(r"https://\S+")
 _CODE = re.compile(r"\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b")
 _SIDE_TOOLS = {"command_execution": "shell", "file_change": "file_change", "web_search": "web_search"}
+# Built in, Codex's own choice only: which models an account may use differs, so a machine lists them
+# in `visualizer.agent.codex.models`.
+MODELS = ({"id": DEFAULT, "label": "Default"},)
 
 
 class CodexConverter:
@@ -54,6 +58,7 @@ class CodexConverter:
     def __init__(self):
         self.resume_id: str | None = None
         self.done = False
+        self.model: str | None = None            # `codex exec --json` 0.166 names no model in its events
         self._nonce = uuid.uuid4().hex[:8]
         self._calls: set[str] = set()
         self._last_error: str | None = None
@@ -129,13 +134,20 @@ class CodexConverter:
 
 class Codex:
     name = "codex"
+    # Checked on 0.166.0: thread.started carries only the thread id, turn.started nothing, and no item
+    # names the model; the service shows the requested one.
+    reports_model = False
 
     def __init__(self, command: str = "codex", model: str | None = None, disable=DISABLED, config=None,
-                 env_passthrough=()):
-        self.command, self.model = command, model
+                 env_passthrough=(), models=None):
+        self.command, self.model = command, safe_id(model)
+        self._choices = choices(MODELS, (), models, None, model, None)
         self.disable = tuple(disable)
         self.config = dict(config or {})          # extra `-c key=value` (per machine; never a secret)
         self.env_passthrough = tuple(env_passthrough)
+
+    def choices(self) -> Choices:
+        return self._choices
 
     def executable(self, path: str | None = None) -> str | None:
         return which(self.command, path if path is not None else os.environ.get("PATH"))
@@ -180,8 +192,11 @@ class Codex:
             argv += ["-c", f"{k}={toml_value(v)}"]
         for f in self.disable:
             argv += ["--disable", f]
-        if self.model:
-            argv += ["-m", self.model]
+        # the turn's choice, else the configured one; `default` is Codex's own (no flag). `exec resume`
+        # takes -m too (checked on 0.166.0), so a new model keeps the thread.
+        model = safe_id(turn.model if turn.model is not None else self.model)
+        if model and model != DEFAULT:
+            argv += ["-m", model]
         argv.append("-")
         env = {TOKEN_ENV: turn.secret}
         env.update({k: os.environ[k] for k in self.env_passthrough if k in os.environ})
@@ -194,4 +209,4 @@ class Codex:
 def factory(conf: dict, base=None) -> Codex:
     return Codex(command=str(conf.get("command", "codex")), model=conf.get("model"),
                  disable=conf.get("disable", DISABLED), config=conf.get("config"),
-                 env_passthrough=conf.get("env_passthrough", ()))
+                 env_passthrough=conf.get("env_passthrough", ()), models=conf.get("models"))

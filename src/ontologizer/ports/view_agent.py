@@ -37,6 +37,8 @@ class Turn:
     resume: str | None                   # the harness's own conversation id, from an earlier turn
     workdir: Path                        # an empty private directory: the harness's working directory
     scratch: Path                        # a private directory for this turn's files (removed after it)
+    model: str | None = None             # this turn's model: None the adapter's configured one, "default" no flag
+    effort: str | None = None            # the same for the effort, where the harness has one
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,17 @@ class LoginScreen:
     failure: str | None = None           # the command's own failure line, when it printed one
 
 
+@dataclass(frozen=True)
+class Choices:
+    """What the page may choose for a harness (docs/visualizer-agent.md §2, §7): models as `{id, label}`, the
+    efforts, and the defaults from the hub's config. The id `default` is the harness's own choice (no flag).
+    The service accepts only these ids, so nothing else reaches a command line."""
+    models: tuple[dict, ...]
+    default_model: str | None
+    efforts: tuple[str, ...] = ()
+    default_effort: str | None = None
+
+
 class Converter(Protocol):
     """Reads one turn's JSON events. Every method returns AI SDK UI message chunks (`uiMessageChunkSchema`
     of ai@7.0.153) for the middle of the turn: the service itself sends start, start-step, data-view,
@@ -63,6 +76,7 @@ class Converter(Protocol):
 
     resume_id: str | None                # the conversation id to resume on the next turn, once known
     done: bool                           # the harness reported the end of the turn
+    model: str | None                    # the model the harness says answers, once it has said it (else None)
 
     def feed(self, event: dict) -> list[dict]: ...
 
@@ -71,6 +85,9 @@ class Converter(Protocol):
 
 class Harness(Protocol):
     name: str
+    reports_model: bool                  # its converter learns the answering model early in the turn
+
+    def choices(self) -> Choices: ...
 
     def executable(self, path: str | None = None) -> str | None: ...   # the CLI on PATH `path`, or None
 
