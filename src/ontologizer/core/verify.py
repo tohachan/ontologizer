@@ -710,15 +710,19 @@ def apply(run: Run, project: str, keep_failed: bool = False) -> dict:
     doc.setdefault("reconciled", {})["verified"] = {"run": run.id, "recheck_model": ra.get("model"),
                                                     "recheck_harness": ra.get("harness")}
     save_json(f, doc)
+    # the change rate counts the verdicts given in this pack: a carried one was counted in the run that gave it
     by_type: dict[str, dict] = {}
     for it in rc["items"]:
         if it["id"] not in verdicts:
             continue
-        t = by_type.setdefault(it["type"], {"rechecked": 0, "changed": 0})
+        t = by_type.setdefault(it["type"], {"rechecked": 0, "changed": 0, "carried": 0})
+        if origin.get(it["id"]) == "carried":
+            t["carried"] += 1
+            continue
         t["rechecked"] += 1
         t["changed"] += verdicts[it["id"]]["verdict"] == "change"
     mp = [it for it in rc["items"] if it["type"] == "mapping" and it["judgement"].get("kind") == "partial"
-          and it["id"] in verdicts]
+          and it["id"] in verdicts and origin.get(it["id"]) != "carried"]
     if mp:
         by_type["mapping-partial"] = {"rechecked": len(mp),
                                       "changed": sum(verdicts[it["id"]]["verdict"] == "change" for it in mp)}

@@ -67,7 +67,8 @@ def test_remap_changes_or_removes_an_earlier_mapping(study, tmp_path):  # noqa: 
     assert decide("b", {"remap": [change]}) == 0
     m = next(m for m in _maps(cfg, "gate") if m["target"] == "domain:step")
     assert m["kind"] == "equivalence" and "overlap" not in m
-    assert m["note"] == "made at stage 4 Changed in step 3 (b.yaml) from partial: the difference went"
+    assert m["note"] == ("Earlier, as partial: made at stage 4 Changed in step 3 (b.yaml) from partial to "
+                         "equivalence: the difference went")
     assert decide("b", {"remap": [change]}) == 0                               # idempotent
     assert next(m for m in _maps(cfg, "gate") if m["target"] == "domain:step")["note"].count("Changed") == 1
     # removal with kind null; a partial needs overlap and differs; a reason is required
@@ -97,3 +98,15 @@ def test_support_record_follows_the_mappings(study, tmp_path):  # noqa: F811
     assert decide("b", {"new_domain": [new("step")]}) == 0     # any later file refreshes it
     s = _shared(seeds, "session")["support"]
     assert s["projects"] == ["alpha"] and s["families"] == [fr.family_of("alpha")]
+
+
+def test_a_settlement_left_without_its_mapping_is_reported(study, tmp_path, capsys):  # noqa: F811
+    cfg, fr, seeds, decide, new = _grow(study, tmp_path)
+    assert decide("a", {"new_domain": [new("session")]}) == 0
+    _save_maps(cfg, "gate", [{"target": "domain:session", "kind": "partial", "overlap": "o", "differs": "d"}])
+    assert decide("b", {"settled": [{"concept": "alpha:gate", "target": "domain:session", "reason": "whole and part"}]}) == 0
+    assert "settles nothing" not in capsys.readouterr().err
+    assert decide("c", {"remap": [{"concept": "alpha:gate", "target": "domain:session", "kind": None,
+                                   "reason": "not a reading of it"}]}) == 0
+    err = capsys.readouterr().err
+    assert "settled alpha:gate -> domain:session (b.yaml) settles nothing: no such mapping any more" in err

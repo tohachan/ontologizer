@@ -92,6 +92,23 @@ def test_a_carried_verdict_says_when_its_support_changed(study, tmp_path):
     assert "judged_support" not in next(i for i in _rv(r2)["items"] if i["ref"] == "domain:step")
 
 
+def test_a_carried_relation_verdict_says_when_its_counterpart_changed(study, tmp_path):
+    cfg, fr, seeds, r1 = _accepted_r1(study, tmp_path)
+    ref = "domain:step--uses--domain:session"
+    assert next(r for r in _rv(r1)["relations"] if r["ref"] == ref)["counterpart"] is False
+    _relations(cfg, ("step", "uses", "session"))             # a project relation now stands behind it
+    r2 = _next_run(study)
+    report.stability(r2, fr)
+    d = review.build(r2, fr, since="r1")
+    assert d["counterpart_changed"] == [{"ref": ref, "from": False, "to": True}]
+    rel = next(r for r in _rv(r2)["relations"] if r["ref"] == ref)
+    assert rel["verdict"] == "accept" and rel["judged_counterpart"] is False
+    assert review.build(r2, fr, since="r1")["counterpart_changed"][0]["ref"] == ref     # stays until looked at
+    assert review.apply(r2, "reviewer")["counterpart_changed"] == 1
+    _edit_rv(r2, ref, counterpart_changed=...)
+    assert review.build(r2, fr, since="r1")["counterpart_changed"] == []
+
+
 def test_review_build_prints_the_changed_support(study, tmp_path, capsys):
     from ontologizer import cli
     cfg, fr, seeds, r1 = _accepted_r1(study, tmp_path)
@@ -240,6 +257,25 @@ def test_a_concept_restored_after_verification_says_so(study, tmp_path):
     report.stability(r2, fr)
     review.build(r2, fr, since="r1")
     assert _sup(r2, "domain:step")["verified"] == "restored"
+
+
+def test_a_restoration_is_seen_in_the_newer_removed_claims_form(study, tmp_path):
+    cfg, fr, seeds, r1 = _accepted_r1(study, tmp_path)
+    _verify_file(r1, [{"claim": "concept:step", "evidence": 0, "path": "doc.md", "lines": "2",
+                       "verdict": "unsupported"}],
+                 removed=[{"claim": "concept:step", "reason": "no supported evidence", "restore": {}}])
+    review.build(r1, fr)
+    assert _sup(r1, "domain:step")["verified"] == "restored"
+
+
+def test_evidence_stage_6_pruned_is_not_in_the_share(study, tmp_path):
+    cfg, fr, seeds, r1 = _accepted_r1(study, tmp_path)
+    _verify_file(r1, [{"claim": "concept:step", "evidence": 0, "path": "doc.md", "lines": "2", "verdict": "supported"},
+                      {"claim": "concept:step", "evidence": 1, "path": "doc.md", "lines": "9",
+                       "verdict": "unsupported"}])      # the second was pruned: the concept no longer cites line 9
+    review.build(r1, fr)
+    s = _sup(r1, "domain:step")
+    assert (s["verified"], s["verified_pruned"]) == ("1/1", 1)
 
 
 # ---- 5. counterpart ---------------------------------------------------------------------

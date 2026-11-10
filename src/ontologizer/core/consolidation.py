@@ -190,6 +190,8 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
         _refresh_support(shared, concepts, frame)
     for lv in seeds:
         save(seeds[lv], shared[lv])
+    if frame is not None:
+        _warn_stale_settlements(Path(decision_file).parent, extractions)
     for p, (f, d) in extractions.items():
         save(f, d)
     left = sum(1 for (_, d) in extractions.values() for c in d["concepts"] for m in c.get("maps_to", []) if m.get("candidate"))
@@ -200,6 +202,13 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
           + (f"; amended {len(amends)} concepts" if amends else "")
           + (f"; changed {remapped} earlier mappings" if remapped else ""))
     return 0
+
+
+def _warn_stale_settlements(decisions_dir: Path, extractions: dict) -> None:
+    from ontologizer.core.shared import stale_settlements
+    for x in stale_settlements(decisions_dir, {p: d for p, (_, d) in extractions.items()}):
+        print(f"warning: settled {x['concept']} -> {x['target']} ({x['file']}) settles nothing: {x['why']}",
+              file=sys.stderr)
 
 
 def _support_mapping(c: dict, tgt: str, level: str, kind: str | None, how) -> int:
@@ -330,7 +339,10 @@ def _remap(dec: dict, shared: dict, concepts: dict, name: str) -> tuple[int, lis
             n += 1
             continue
         if m.get("kind") != kind:
-            m["note"] = f"{m.get('note', '')} Changed in step 3 ({name}) from {m.get('kind')}: {x['reason']}".strip()
+            old = str(m.get("note", "")).strip()
+            if old and not old.startswith("Earlier, as "):   # the earlier note explains the earlier kind, so it says so
+                old = f"Earlier, as {m.get('kind')}: {old}"
+            m["note"] = f"{old} Changed in step 3 ({name}) from {m.get('kind')} to {kind}: {x['reason']}".strip()
             m["kind"] = kind
             n += 1
         for k in ("overlap", "differs"):

@@ -55,6 +55,11 @@ def _runs_dir(cfg) -> Path:
     return cfg.root / (cfg.data.get("process") or {}).get("runs", "runs")
 
 
+def _removed_ids(v: dict) -> set[str]:
+    """The claims stage 6 removed, from either form of `applied.removed_claims` (ids, or entries with `claim`)."""
+    return {x if isinstance(x, str) else x.get("claim") for x in (v.get("applied") or {}).get("removed_claims") or []}
+
+
 def _earlier_runs(run: Run, since: str | None) -> list[Run]:
     """`since`, then the run its review was built `since`, and so on: where earlier verification lives."""
     out, seen, rid = [], {run.id}, since
@@ -86,12 +91,17 @@ def _verification(runs: list[Run], cache: dict, project: str, pc: dict) -> dict:
         vi = [i for i in items if i["final"] in CHECKED]
         ok = sum(1 for i in vi if i["final"] == "supported")
         share = f"{ok}/{len(vi)}" if vi else "unchecked"
-        if claim in ((v.get("applied") or {}).get("removed_claims") or []):
+        if claim in _removed_ids(v):
             return {"verified": "restored", "verified_before": share, "verified_in": r.id}
         if not vi:
             continue
-        if k == 0:
-            return {"verified": share}
+        if k == 0:   # this run: only the evidence the concept still has; what stage 6 pruned is counted apart
+            kept = [i for i in vi if not now_ev or (i.get("path"), str(i.get("lines") or "")) in now_ev]
+            out = {"verified": (f"{sum(1 for i in kept if i['final'] == 'supported')}/{len(kept)}"
+                                if kept else "unchecked")}
+            if len(kept) < len(vi):
+                out["verified_pruned"] = len(vi) - len(kept)
+            return out
         if not now_ev or not now_ev <= {(i.get("path"), str(i.get("lines") or "")) for i in items}:
             break   # that run checked other evidence than the concept has now
         return {"verified": share, "verified_in": r.id}
@@ -143,11 +153,13 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
                            "its ends (`counterpart_other` lists the ones of another type or direction), so check it "
                            "in the source. An item with `support_changed` keeps a verdict given on other support "
                            "(`judged_support`): look at what was added or removed, change the verdict if it no longer "
-                           "holds, then delete `support_changed`. A verdict with `carried_from` comes from an earlier "
+                           "holds, then delete `support_changed`. A relation with `counterpart_changed` is the same, "
+                           "its verdict given while `judged_counterpart` held. A verdict with `carried_from` comes from an earlier "
                            "run; set it to null to reopen it, and a verdict or comment you change is your own. "
                            "`verified` is the stage 6 result of a supporting concept (`verified_in`: the earlier run "
                            "that checked it); `restored` means stage 6 removed it and it was put back afterwards "
-                           "(`verified_before`: the result that removed it), so check its evidence in the source. "
+                           "(`verified_before`: the result that removed it), so check its evidence in the source; "
+                           "`verified_pruned` counts evidence stage 6 checked and then removed. "
                            "`readings` lists the partial or disputed concepts behind a shared one: an open reading "
                            "or a declared dispute makes it `disputed` whatever the verdict, until a consolidation "
                            "file settles it with a reason.",
@@ -164,8 +176,9 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
     p.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=120))
     open_ = sum(1 for i in items + relations if not i.get("verdict"))
     changed = [{"ref": i["ref"], **i["support_changed"]} for i in items if i.get("support_changed")]
+    counter = [{"ref": r["ref"], **r["counterpart_changed"]} for r in relations if r.get("counterpart_changed")]
     return {"items": len(items), "relations": len(relations), "open": open_, "kept": kept, "carried": carried,
-            "support_changed": changed, "reopened": sum(1 for i in items + relations if i.get("reopened")),
+            "support_changed": changed, "counterpart_changed": counter, "reopened": sum(1 for i in items + relations if i.get("reopened")),
             "path": str(p)}
 
 
@@ -210,6 +223,8 @@ def _carry(old: dict, items: list[dict], relations: list[dict], accepted_only: b
                     i["carried_as"] = o["carried_as"]
             if "support" in i:
                 _mark_support(o, i)
+            elif "from" in i:
+                _mark_counterpart(o, i)
             n += 1
     return n
 
@@ -255,6 +270,18 @@ def _mark_support(o: dict, i: dict) -> None:
     if judged != now_:
         i["judged_support"] = judged
         i["support_changed"] = {"added": sorted(set(now_) - set(judged)), "removed": sorted(set(judged) - set(now_))}
+
+
+def _mark_counterpart(o: dict, i: dict) -> None:
+    """The same for a relation: a verdict given while a project relation stood behind it (or none did) says so
+    when that changed, until the reviewer deletes `counterpart_changed`."""
+    if "counterpart" not in o and "judged_counterpart" not in o:
+        return
+    keep = o.get("counterpart_changed") and "judged_counterpart" in o and (not o.get("carried_from") or is_carried(o))
+    judged = o["judged_counterpart"] if keep else o.get("counterpart")
+    if judged != i.get("counterpart"):
+        i["judged_counterpart"] = judged
+        i["counterpart_changed"] = {"from": judged, "to": i.get("counterpart")}
 
 
 def _upward(start: str, parents: dict[str, set[str]]) -> set[str]:
@@ -399,13 +426,15 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
     carried = sum(1 for i in items + relations if is_carried(i))
     changed = sum(1 for i in items if i.get("support_changed"))
+    counter = sum(1 for r in relations if r.get("counterpart_changed"))
     note = f"run {run.id}" + (f"; reviewer effort {effort}" if effort else "") \
         + (f"; {carried} verdicts carried from an earlier review" if carried else "") \
-        + (f"; {changed} verdicts kept although their support changed" if changed else "")
+        + (f"; {changed} verdicts kept although their support changed" if changed else "") \
+        + (f"; {counter} relation verdicts kept although their counterpart changed" if counter else "")
     entry = framing.approve(run.cfg, "review", p, by=by, at=now(), note=note, covers=covers)
     return {**counts, "accepted_unconfirmed": unconfirmed, "disputed": disputed, "one_sided": one_sided,
             "mappings_removed": unbound, "gate": entry, "relations_rejected": len(gone_rel), "carried": carried,
-            "support_changed": changed}
+            "support_changed": changed, "counterpart_changed": counter}
 
 
 def _note(c: dict, by: str, run_id: str, comment: str) -> None:

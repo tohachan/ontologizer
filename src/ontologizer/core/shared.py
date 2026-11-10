@@ -156,6 +156,35 @@ def disputes(cfg: Config, docs: dict[str, dict]) -> dict[str, dict]:
     return {r: e for r, e in out.items() if e["open"] or e["settled"] or e["declared"]}
 
 
+def stale_settlements(decisions_dir: Path, docs: dict[str, dict]) -> list[dict]:
+    """`settled: [{concept, target, reason}]` entries that settle nothing any more: the project concept no longer
+    maps onto the target, or the mapping is no longer partial and the concept no longer disputed. They do no harm,
+    but they read as if a reading were still open; a later decision file can say why it went."""
+    maps: dict[tuple[str, str], dict] = {}
+    status: dict[str, str] = {}
+    for project, d in docs.items():
+        for c in d.get("concepts", []):
+            status[f"{project}:{c['id']}"] = c.get("status")
+            for m in c.get("maps_to", []):
+                if m.get("target"):
+                    maps[(f"{project}:{c['id']}", m["target"])] = m
+    out = []
+    for p in sorted(Path(decisions_dir).glob("*.yaml")):
+        dec = yaml.safe_load(p.read_text()) or {}
+        for x in dec.get("settled") or []:
+            if not x.get("concept") or x["concept"].split(":")[0] not in docs:
+                continue
+            m = maps.get((x["concept"], x["target"]))
+            if m is None:
+                why = "no such mapping any more"
+            elif m.get("kind") != "partial" and status.get(x["concept"]) != "disputed":
+                why = f"the mapping is now {m.get('kind')} and the concept not disputed"
+            else:
+                continue
+            out.append({"concept": x["concept"], "target": x["target"], "file": p.name, "why": why})
+    return out
+
+
 def carry_dispute(c: dict, e: dict | None) -> bool:
     """Bring a shared concept in line with its readings. True when it is now disputed.
 

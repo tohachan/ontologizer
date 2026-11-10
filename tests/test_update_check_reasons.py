@@ -262,3 +262,30 @@ def test_jev_finds_its_key_in_the_main_checkout(tmp_path, monkeypatch):
     assert jev.Jev({}, base=wt / "owner")._key == "k-main"
     (main / "owner" / "keys.env").write_text("OPENROUTER_API_KEY=k-named\n")
     assert jev.Jev({"dotenv": "keys.env"}, base=wt / "owner")._key == "k-named"
+
+
+# ---- a question the frame retired on purpose ------------------------------------------
+def test_a_question_retired_by_the_frame_is_reported_not_blocking(study, tmp_path):
+    uc, cfg, fr, seeds, decide, new, r, report_now = _update_setup(study, tmp_path)
+    run = _run(study)
+    _report(cfg, [{"id": "cq2", "status": "partial"}])            # cq1 is gone from the frame
+    b = next(x for x in uc.check(run, fr, r.engine, "0.1", "r1")["blocking"] if "question cq1" in x)
+    assert "no longer in the frame" in b and "retired_questions" in b
+    fr.h["retired_questions"] = [{"id": "cq1", "reason": "merged into cq2"}]
+    d = uc.check(run, fr, r.engine, "0.1", "r1")
+    assert not any("question cq1" in x for x in d["blocking"])
+    assert d["questions_retired"] == [{"id": "cq1", "was": "answered", "reason": "merged into cq2"}]
+    assert "Questions retired by the frame" in run.path("update-check.md").read_text()
+    fr.h["retired_questions"] = [{"id": "cq1", "reason": " "}]        # no reason: still blocks
+    assert any("question cq1" in x for x in uc.check(run, fr, r.engine, "0.1", "r1")["blocking"])
+
+
+def test_the_frame_checks_its_retired_questions():
+    from ontologizer.core.frame import check
+    from test_process import FRAME
+    ok = FRAME.replace("out_of_scope:", "retired_questions:\n  - {id: old-question, reason: merged}\nout_of_scope:", 1)
+    assert not [e for e in check(ok) if "retired" in e]
+    bad = FRAME.replace("out_of_scope:", "retired_questions:\n  - {id: old-question}\nout_of_scope:", 1)
+    assert any("retired_questions[0]: id (slug) and reason required" in e for e in check(bad))
+    still = FRAME.replace("out_of_scope:", "retired_questions:\n  - {id: cq1, reason: r}\nout_of_scope:", 1)
+    assert any("cq1 is still a competency question" in e for e in check(still))

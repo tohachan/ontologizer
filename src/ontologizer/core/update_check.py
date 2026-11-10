@@ -11,6 +11,8 @@ Nothing here needs a new source: it holds the working levels to what was already
 
 Readings that hold a shared concept apart (`shared.disputes`) do not block: they are listed, and `review apply`
 marks the concept `disputed`.
+A question the frame dropped on purpose is listed under `retired_questions: [{id, reason}]` in the frame, which
+the owner approves; it is reported with its reason instead of blocking.
 A hand-written competency-question status lowered on purpose carries `downgrade: {from, reason}` in the
 run's `cq.yaml`; it is reported with its reason instead of blocking. A changed concept whose cited passages
 support it only in part is a warning naming the passages, not a blocker (`_evidence_findings`).
@@ -222,7 +224,8 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
 
     report = load_json(run.path("report.json"))
     base_report = load_json(run.cfg.root / (run.cfg.data.get("process") or {}).get("runs", "runs") / base_run / "report.json")
-    cq_lost, cq_down = [], []
+    cq_lost, cq_down, cq_retired = [], [], []
+    retired = frame.retired_questions
     if report is None:
         blocking.append(f"no report for run {run.id}: run `ontologizer report`")
     else:
@@ -241,7 +244,12 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
                 continue
             is_ = current.get(q["id"])
             if is_ is None:
-                cq_lost.append({"id": q["id"], "was": q["status"], "now": "no longer in the frame"})
+                if str(retired.get(q["id"]) or "").strip():   # dropped by the owner's frame, with its reason
+                    cq_retired.append({"id": q["id"], "was": q["status"], "reason": retired[q["id"]]})
+                    continue
+                cq_lost.append({"id": q["id"], "was": q["status"], "now": "no longer in the frame",
+                                "hint": "if it was dropped on purpose, list it under `retired_questions: [{id, reason}]` "
+                                        "in the frame and approve the frame again"})
             elif RANK.get(is_.get("status"), 0) < was:
                 row = {"id": q["id"], "was": q["status"], "now": is_.get("status")}
                 dg = is_.get("downgrade") or {}
@@ -260,14 +268,18 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
         if b is not None and b > (a or 0):
             blocking.append(f"the reasoner finds {b} clash(es), {a or 0} in the base run")
 
-    held = disputes(run.cfg, application_docs(run.cfg, [p for p in frame.projects if p not in frame.overlay]))
+    docs = application_docs(run.cfg, [p for p in frame.projects if p not in frame.overlay])
+    held = disputes(run.cfg, docs)
+    from ontologizer.core.shared import stale_settlements
+    warnings += [f"settled {x['concept']} -> {x['target']} ({x['file']}) settles nothing: {x['why']}"
+                 for x in stale_settlements(run.cfg.root / "consolidation", docs)]
     open_disputes = {r: {"open": e["open"], "declared": e["declared"]} for r, e in sorted(held.items())
                      if r in working and (e["open"] or e["declared"])}
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
     doc = {"run": run.id, "at": now(), "base": base, "base_run": base_run, "mode": run.mode("verify"),
            "kept": len(kept), "changed": changed, "moved": moved, "added": added, "removed": removed,
            "relations_gone": rel_gone, "evidence": ev, "min_share": min_share, "questions_lost": cq_lost,
-           "questions_downgraded": cq_down, "disputes": open_disputes, "warnings": warnings, "blocking": blocking}
+           "questions_downgraded": cq_down, "questions_retired": cq_retired, "disputes": open_disputes, "warnings": warnings, "blocking": blocking}
     save_json(run.path("update-check.json"), doc)
     run.path("update-check.md").write_text(render(doc))
     framing.record(run.cfg, {"gate": "update-check", "file": str(run.path("update-check.json").relative_to(run.cfg.root)),
@@ -290,6 +302,9 @@ def render(d: dict) -> str:
     if d.get("questions_downgraded"):
         lines += ["## Questions downgraded with a reason", ""] \
             + [f"- {x['id']}: was {x['was']}, now {x['now']}: {x['reason']}" for x in d["questions_downgraded"]] + [""]
+    if d.get("questions_retired"):
+        lines += ["## Questions retired by the frame", ""] \
+            + [f"- {x['id']}: was {x['was']}: {x['reason']}" for x in d["questions_retired"]] + [""]
     if d["changed"] or d["moved"]:
         lines += ["## Changed and moved", "",
                   "Cited passages: the lines of every project concept mapped to the concept, under any mapping kind. "

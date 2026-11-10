@@ -366,7 +366,8 @@ def cmd_update_check(args) -> int:
         return 2
     print(f"update-check @{args.base}: {d['kept']} kept, {len(d['changed'])} changed, {len(d['moved'])} moved, "
           f"{len(d['added'])} added, {len(d['removed'])} removed; {len(d['blocking'])} blocking, "
-          f"{len(d['warnings'])} warning(s), {len(d['questions_downgraded'])} question(s) downgraded with a reason → "
+          f"{len(d['warnings'])} warning(s), {len(d['questions_downgraded'])} question(s) downgraded with a reason, "
+          f"{len(d.get('questions_retired', []))} retired by the frame → "
           f"{run.path('update-check.md')}")
     for x in d["blocking"]:
         print(f"- {x}")
@@ -420,6 +421,11 @@ def cmd_review(args) -> int:
             for x in d["support_changed"]:
                 print(f"  {x['ref']}: " + "; ".join(
                     f"{k} {', '.join(x[k])}" for k in ("added", "removed") if x[k]))
+        if d.get("counterpart_changed"):
+            print(f"review: {len(d['counterpart_changed'])} relation verdict(s) kept although a project counterpart "
+                  f"appeared or went; look at each and delete `counterpart_changed` once it is checked:")
+            for x in d["counterpart_changed"]:
+                print(f"  {x['ref']}: counterpart {x['from']} -> {x['to']}")
         return 0
     if not args.by:
         print("review apply needs --by NAME (the reviewing agent's model, e.g. claude-opus-5-5, or a person)",
@@ -430,6 +436,8 @@ def cmd_review(args) -> int:
           f"{d.get('disputed', 0)} disputed, {d['mappings_removed']} project mappings removed, {d['relations_rejected']} relations rejected, "
           f"{d['carried']} verdicts carried"
           + (f", {d['support_changed']} kept although their support changed" if d.get("support_changed") else "")
+          + (f", {d['counterpart_changed']} relation verdicts kept although their counterpart changed"
+             if d.get("counterpart_changed") else "")
           + "; gate recorded")
     if d.get("one_sided"):
         print(f"not marked disputed, only one project concept stands behind them: {', '.join(d['one_sided'])}")

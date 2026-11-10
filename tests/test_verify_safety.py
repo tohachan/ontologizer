@@ -158,6 +158,8 @@ def test_changed_judges_only_new_and_changed_claims(study, tmp_path):
     assert d["to_answer"] == 1
     st = verify.apply(run, "alpha")
     assert st["removed_claims"] == [] and st["recheck"]["carried"] == 1
+    by = st["recheck_by_type"][cache["type"]]          # a carried verdict is not counted again in the change rate
+    assert by["carried"] == 1 and by["rechecked"] == 0
     assert [u["id"] for u in st["unverified"]] == ["evidence:concept:session#e1"]
     assert {c["id"] for c in _doc(run)["concepts"]} == {"session", "cache", "lease"}
 
