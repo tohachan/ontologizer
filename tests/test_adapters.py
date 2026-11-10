@@ -209,6 +209,10 @@ a:one a a:Thing .
                                      "format": "turtle"}, base=tmp_path)
     assert inv.available("acme") and not inv.available("other")
     got = {c.id: c for c in inv.candidates("acme")}
-    assert set(got) == {"Thing", "Mode"}                  # no properties, no individuals
+    assert {k: c.kind for k, c in got.items()} == {"Thing": "type", "Mode": "concept", "rel": "property",
+                                                    "one": "individual"}
+    only = plugins.load("inventory", {"adapter": "rdf", "root": "sources", "files": {"acme": "model.txt"},
+                                      "format": "turtle", "kinds": ["type", "concept"]}, base=tmp_path)
+    assert {c.id for c in only.candidates("acme")} == {"Thing", "Mode"}     # `kinds` limits the list
     assert (got["Thing"].kind, got["Thing"].name, got["Thing"].lines) == ("type", "A thing", "6")
     assert (got["Mode"].kind, got["Mode"].lines) == ("concept", "10")

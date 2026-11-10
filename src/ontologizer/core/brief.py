@@ -55,9 +55,12 @@ def render(run: Run, frame: Frame, project: str, ex_id: str, part: int | None = 
     src = source_info(run.cfg, project)
     preset = Preset.load(run.cfg.preset_path)
     if inv.get("status") == "measured":
-        cands = [c for c in inv["candidates"] if c.get("counted")]
+        from ontologizer.core.inventory import ACCOUNTED_KINDS
+        everything = [c for c in inv["candidates"] if c.get("counted")]
         if modules is not None:
-            cands = [c for c in cands if (c.get("module") or ".") in modules]
+            everything = [c for c in everything if (c.get("module") or ".") in modules]
+        cands = [c for c in everything if c.get("kind") not in ACCOUNTED_KINDS]
+        others = [c for c in everything if c.get("kind") in ACCOUNTED_KINDS]
         shown = cands[:INVENTORY_LIST_MAX]
         rows = "\n".join(f"| `{c['id']}` | {c['name']} | {c['kind']} | `{c['path']}`"
                          f"{':' + c['lines'] if c.get('lines') else ''} | {c.get('module') or ''} |" for c in shown)
@@ -68,6 +71,20 @@ def render(run: Run, frame: Frame, project: str, ex_id: str, part: int | None = 
                           f"is measured against this list: cover what is architectural, cite the ids in "
                           f"`inventory`, and say in the report which you left out and why.{scope}")
         inventory_block = "| id | name | kind | where | module |\n| --- | --- | --- | --- | --- |\n" + rows + more
+        if others:
+            o_shown = others[:INVENTORY_LIST_MAX]
+            o_rows = "\n".join(f"| `{c['id']}` | {c['name']} | {c['kind']} | `{c['path']}`"
+                               f"{':' + c['lines'] if c.get('lines') else ''} |" for c in o_shown)
+            o_more = f"\n\n{len(others) - len(o_shown)} more are in the inventory file." if len(others) > len(o_shown) else ""
+            inventory_block += (
+                f"\n\n**Also account for** these {len(others)} terms, which are not concepts by themselves. "
+                f"Coverage is counted per kind against this list too. List each id in the `inventory` of what "
+                f"carries it: a property in the relation (or the concept) that states it; a shape in the "
+                f"`caveats` entry that states its rule; an individual in the `caveats` entry that reports it as "
+                f"an example, or in the concept it is a worked instance of; a scheme or ontology header in the "
+                f"caveat on the source's form. A caveat that lists ids takes the object form "
+                f"`{{\"text\", \"evidence\", \"inventory\"}}`. Say in the report which you left out and why.\n\n"
+                f"| id | name | kind | where |\n| --- | --- | --- | --- |\n" + o_rows + o_more)
     else:
         inventory_line = ("Inventory: none for this project (coverage is unmeasured). Find the concepts from the "
                           "documentation and the code structure; leave `inventory` empty.")

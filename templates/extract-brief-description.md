@@ -44,7 +44,7 @@ For each concept:
 
 {variation_block}
 
-Relations between your concepts: `{{from, to, type, label, evidence}}`, `type` one of {relation_types}. Keep the source's own name of the relation in `label`.
+Relations between your concepts: `{{from, to, type, label, evidence, inventory}}`, `type` one of {relation_types}; `inventory`: the property ids above that the relation states (empty when none). Keep the source's own name of the relation in `label`.
 
 **Absence claims.** When you state that the source lacks something, add it to `absences` with the search protocol: `{{"claim": "...", "protocol": {{"what": "terms and concepts searched for", "where": "paths", "how": "tools and queries used"}}, "result": "what was found"}}`. An absence without a protocol is not accepted.
 

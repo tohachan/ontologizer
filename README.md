@@ -264,7 +264,7 @@ Built in (each is used only when a config names it; none needs a package beyond 
 | --- | --- | --- | --- |
 | evidence | `checkout` | plain git checkouts `<root>/<repo>` | `evidence: [{adapter: checkout, root: ../sources}]` |
 | inventory | `graphify` | an existing Graphify `graph.json` per repository: type nodes and CLI entry points with file, line, module and degree | `inventory: {adapter: graphify, graphs: {acme: ../graphs/acme/graph.json}}` or `{adapter: graphify, pattern: ../graphs/{repo}/graph.json, metadata: ../graphs/{repo}/metadata.json}`; optional `max_candidates` |
-| inventory | `rdf` | the classes and SKOS concepts of an RDF file in a source checkout | `inventory: {adapter: rdf, root: ../sources, files: {acme: model.ttl}, format: turtle}`; `format` when the suffix does not tell it |
+| inventory | `rdf` | the named terms of an RDF file in a source checkout: classes and SKOS concepts, which concepts cover, and properties, SHACL shapes, individuals, schemes and the ontology header, which relations and caveats account for | `inventory: {adapter: rdf, root: ../sources, files: {acme: model.ttl}, format: turtle, kinds: [...]}`; `format` when the suffix does not tell it, `kinds` to list fewer |
 | decisions | `jev` | Jev through OpenRouter's Decisions API (alpha) | `decisions: {adapter: jev, model: typesafe/jev-1.13}`; the key is `OPENROUTER_API_KEY` from the environment or `.env` (owner, then the kit; in a git worktree without its own `.env`, the main checkout's, as for `scripts/oo`), never printed |
 
 **More adapters from a package.** The kit resolves names through entry points (`ontologizer.evidence`, `ontologizer.inventory`, `ontologizer.decisions`), so any installed package that declares them adds adapters without a change to the kit:

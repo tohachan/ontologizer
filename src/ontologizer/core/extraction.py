@@ -25,7 +25,9 @@ Document shape (all keys except `graph` and `concepts` optional):
                   "status": "hypothesis"}]
   }],
   "relations": [{"from": "session", "to": "worktree", "type": "uses",
-                 "label": "runs in", "evidence": [...], "status": "hypothesis"}],
+                 "label": "runs in", "evidence": [...], "status": "hypothesis",
+                 "inventory": ["<property id it carries>"]}],
+  "caveats": ["text", {"text": "...", "evidence": [...], "inventory": ["<shape or individual id>"]}],
   "dimensions": [{"id": "state-location", "label": "...", "definition": "...",
                   "values": [{"id": "database", "label": "...", "definition": "..."}]}],
   "absences": [{"claim": "acme has no X", "protocol": {"what": "...", "where": "...", "how": "..."},
@@ -131,6 +133,13 @@ def validate(doc: dict, preset: Preset, max_concepts: int | None = None) -> list
         if r.get("type") not in RELATION_TYPES:
             errs.append(f"{where}.type: one of {RELATION_TYPES}")
         errs += _validate_evidence(r.get("evidence", []), where, doc, required=False)
+        errs += _validate_inventory(r, where)
+    for key in ("caveats", "absences"):
+        for i, c in enumerate(doc.get(key, [])):
+            if key == "caveats" and isinstance(c, dict) and not str(c.get("text", "")).strip():
+                errs.append(f"caveats[{i}].text: required in the object form")
+            if isinstance(c, dict):
+                errs += _validate_inventory(c, f"{key}[{i}]")
     dim_ids = {d.get("id") for d in doc.get("dimensions", [])}
     for i, d in enumerate(doc.get("dimensions", [])):
         if not SLUG.match(str(d.get("id", ""))):
@@ -147,6 +156,13 @@ def validate(doc: dict, preset: Preset, max_concepts: int | None = None) -> list
         errs += _validate_evidence(v.get("evidence", []), where, doc, required=True)
         _ = dim_ids
     return errs
+
+
+def _validate_inventory(x: dict, where: str) -> list[str]:
+    inv = x.get("inventory", [])
+    if not isinstance(inv, list) or not all(isinstance(i, str) and i for i in inv):
+        return [f"{where}.inventory: list of inventory candidate ids"]
+    return []
 
 
 def _validate_evidence(evs: list, where: str, doc: dict, required: bool) -> list[str]:

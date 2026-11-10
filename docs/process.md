@@ -87,6 +87,8 @@ The inventory adapter (e.g. the built-in `graphify`) lists the candidates of eac
 
 With decisions on, each candidate is triaged into *architectural concept / implementation detail / UI / test / config*, and only architectural concepts count for coverage. With decisions off, every candidate counts. Triage runs in `llm` mode with the model `process.roles.inventory` (a model stronger than Jev, from another vendor than the gold labeller). Jev's triage probabilities separate architectural candidates too weakly to bound their loss, so `jev` mode is kept for ablation, not for coverage.
 
+For an RDF source, the `rdf` adapter lists every named term by kind: classes (`type`) and SKOS concepts (`concept`), which concepts cover, and properties, SHACL shapes, individuals of the file's own classes, concept schemes and the ontology header. An extraction accounts for those in the `inventory` of what carries them: a property in its relation, a shape in the caveat that states its rule, an individual in the caveat that reports it as an example or in the concept it is an instance of (caveats then take the form `{text, evidence, inventory}`). The brief lists them apart, and the report counts coverage per kind; the headline coverage stays over the kinds concepts cover, so it compares with earlier runs. `kinds:` in the adapter's config lists fewer.
+
 Without a graph for a project, the stage records the project as `unmeasured`. Coverage is then reported as unmeasured, never as zero.
 
 ### 2. Double extraction
@@ -193,7 +195,7 @@ The run lives in the target owner's config:
 
 An ontology of a topic does not wait for a corpus. It starts from what exists and improves with each source or correction, and nothing is confirmed until an independent source says so. Entering the shared levels and being confirmed are separate (§5).
 
-**First version.** Create the owner with its name in the config (`project:`), and frame it with `admission_families: 1` and the source under `sources:`. Commit the source as text under git. For an RDF source, the `rdf` inventory adapter lists its classes and SKOS concepts, so coverage is measured. Stages 1–8 run as usual: all the source's concepts are candidates in stage 5, and each stays a hypothesis.
+**First version.** Create the owner with its name in the config (`project:`), and frame it with `admission_families: 1` and the source under `sources:`. Commit the source as text under git. For an RDF source, the `rdf` inventory adapter lists its named terms by kind (classes, SKOS concepts, properties, shapes, individuals, schemes, the header), so coverage is measured. Stages 1–8 run as usual: all the source's concepts are candidates in stage 5, and each stays a hypothesis.
 
 **Each update is a new run.** A new source, or a correction written up as one (a file with its author and reason), goes through stages 1–4 against the current shared levels. Extraction still sees no shared vocabulary. The mapping then says what happens:
 
@@ -269,7 +271,8 @@ Every metric is computed by code from the run directory and is written to `repor
 
 | Metric | Definition | Stage |
 | --- | --- | --- |
-| Inventory coverage | inventory candidates counted for coverage (architectural ones when triage is on) that a reconciled concept cites ÷ all such candidates; `unmeasured` without an inventory | 1, 3 |
+| Inventory coverage | inventory candidates counted for coverage (architectural ones when triage is on) that a reconciled concept cites ÷ all such candidates, over the kinds concepts cover (not properties, shapes, individuals, schemes or the ontology header); `unmeasured` without an inventory | 1, 3 |
+| Inventory coverage by kind | per inventory kind: candidates listed in an `inventory` field (a concept's for classes and concepts; a concept's, relation's, caveat's or absence's for the other kinds), those whose line evidence only cites, and the missing ones by id | 1, 3 |
 | Extraction agreement | matched concepts ÷ (concepts of A + concepts of B − matched), per project pair of extractors | 3 |
 | Jev–LLM disagreement rate | questions answered by both Jev and an LLM (the category second opinion; the mapping candidate against the chosen target) where the answers differ ÷ such questions | 4, 6 |
 | Verified-evidence share | evidence items judged supporting ÷ evidence items checked; unchecked items are counted separately | 6 |

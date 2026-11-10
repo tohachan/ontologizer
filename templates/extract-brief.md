@@ -39,7 +39,7 @@ For each concept:
 
 {variation_block}
 
-Relations between your concepts: `{{from, to, type, label, evidence}}`, `type` one of {relation_types}.
+Relations between your concepts: `{{from, to, type, label, evidence, inventory}}`, `type` one of {relation_types}; `inventory`: the property ids above that the relation states (empty when none).
 
 **Absence claims.** When you state that the project lacks something, add it to `absences` with the search protocol: `{{"claim": "...", "protocol": {{"what": "terms and concepts searched for", "where": "paths, modules, docs", "how": "tools and queries used"}}, "result": "what was found"}}`. An absence without a protocol is not accepted.
 
