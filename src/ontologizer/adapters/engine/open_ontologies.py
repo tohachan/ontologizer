@@ -8,25 +8,24 @@ deliberately absent: on a shared store they replace every package at once
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
 import subprocess
+import time
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
 
-from ontologizer.ports.engine import Capabilities
+from ontologizer.ports.engine import Capabilities, EngineError, EngineUnavailable, ResponseTooLarge
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 # The server refuses request bodies above about 2 MiB (HTTP 413); a graph write larger than this many
 # bytes of SPARQL is split. `OPEN_ONTOLOGIES_MAX_UPDATE_BYTES` overrides it.
 MAX_UPDATE_BYTES = 1_500_000
 STAGING_PREFIX = "urn:ontologizer-staging:"   # outside the kit's graph prefix, so snapshots never see it
-
-
-class EngineError(RuntimeError):
-    pass
 
 
 def _token() -> str:
@@ -64,7 +63,7 @@ class OpenOntologies:
             self._token = _token()
         return self._token
 
-    def _post(self, path: str, payload: dict, headers: dict | None = None):
+    def _post(self, path: str, payload: dict, headers: dict | None = None, timeout: float | None = None):
         req = urllib.request.Request(
             f"{self.url}/{path.lstrip('/')}",
             data=json.dumps(payload).encode(),
@@ -72,7 +71,7 @@ class OpenOntologies:
                      "Content-Type": "application/json", **(headers or {})},
             method="POST",
         )
-        return urllib.request.urlopen(req, timeout=self.timeout)
+        return urllib.request.urlopen(req, timeout=self.timeout if timeout is None else timeout)
 
     def _rest(self, path: str, payload: dict) -> dict | list:
         with self._post(f"api/{path}", payload) as r:
@@ -152,6 +151,44 @@ class OpenOntologies:
     def select(self, sparql: str) -> list[dict[str, str]]:
         body = self._rest("query", {"query": sparql})
         return body.get("results", [])
+
+    def select_bounded(self, sparql: str, max_bytes: int, timeout: float) -> list[dict[str, str]]:
+        """SELECT for a reader that must not buffer without limit or wait without end. Every failure
+        raises, so none of them can look like an empty result."""
+        try:
+            raw = self._read_bounded({"query": sparql}, max_bytes, timeout)
+        except urllib.error.HTTPError as e:
+            raise EngineError(f"query: HTTP {e.code}") from None
+        except (OSError, http.client.HTTPException, subprocess.SubprocessError) as e:
+            raise EngineUnavailable(f"query: no answer from {self.url}: {type(e).__name__}") from None
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            raise EngineError("query: the answer is not JSON") from None
+        if body is None:
+            raise EngineError("query: engine error (message lost: unescaped JSON)")   # see _rest
+        if isinstance(body, dict) and "error" in body:
+            raise EngineError(str(body["error"]))
+        rows = body.get("results") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            raise EngineError("query: the answer has no results list")
+        return rows
+
+    def _read_bounded(self, payload: dict, max_bytes: int, timeout: float) -> bytes:
+        deadline = time.monotonic() + timeout
+        with self._post("api/query", payload, timeout=timeout) as r:
+            declared = r.headers.get("Content-Length")
+            if declared and declared.isdigit() and int(declared) > max_bytes:
+                raise ResponseTooLarge(f"query: the answer declares {declared} bytes, the limit is {max_bytes}")
+            chunks, total = [], 0
+            while chunk := r.read1(65536):   # read1 returns after one receive, so the deadline is checked
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ResponseTooLarge(f"query: the answer exceeds {max_bytes} bytes")
+                if time.monotonic() > deadline:
+                    raise TimeoutError
+                chunks.append(chunk)
+        return b"".join(chunks)
 
     def ask(self, sparql: str) -> bool:
         return bool(self._rest("query", {"query": sparql}).get("result"))

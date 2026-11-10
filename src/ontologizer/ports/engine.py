@@ -14,6 +14,18 @@ class Unsupported(Exception):
     """The engine cannot perform the requested operation or check."""
 
 
+class EngineError(RuntimeError):
+    """The engine answered, but with an error or something unusable."""
+
+
+class EngineUnavailable(EngineError):
+    """No answer: no connection, no token, or the time ran out."""
+
+
+class ResponseTooLarge(EngineError):
+    """The answer is larger than the reader allowed; it was not read to the end."""
+
+
 @dataclass(frozen=True)
 class Capabilities:
     named_graph_write: bool = False
@@ -59,3 +71,10 @@ class Engine(Protocol):
     def remove_from_graph(self, graph_iri: str, ntriples: str) -> int: ...
 
     def drop_graph(self, graph_iri: str) -> None: ...
+
+
+class BoundedSelect(Protocol):
+    def select_bounded(self, sparql: str, max_bytes: int, timeout: float) -> list[dict[str, str]]:
+        """SELECT that stops reading at `max_bytes` and at `timeout` seconds, and raises
+        instead of returning an empty or partial result."""
+        ...
