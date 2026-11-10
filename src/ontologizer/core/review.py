@@ -156,7 +156,7 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
     p.parent.mkdir(parents=True, exist_ok=True)
     kept = 0
     if p.is_file():   # verdicts stand for what has not changed since they were given
-        kept = _carry(yaml.safe_load(p.read_text()) or {}, items, relations)
+        kept = _carry(_with_carried_as(run.cfg, yaml.safe_load(p.read_text()) or {}), items, relations)
     carried = 0
     if since:
         q = _runs_dir(run.cfg) / since / "review.yaml"
@@ -212,6 +212,24 @@ def _carry(old: dict, items: list[dict], relations: list[dict], accepted_only: b
                 _mark_support(o, i)
             n += 1
     return n
+
+
+def _with_carried_as(cfg, old: dict) -> dict:
+    """A file written before `carried_as` existed: read what each carried verdict was from the review it came from,
+    so a comment the reviewer has since changed counts as the reviewer's own."""
+    cache: dict[str, dict] = {}
+    for x in old.get("items", []) + old.get("relations", []):
+        src = x.get("carried_from")
+        if not src or "carried_as" in x:
+            continue
+        if src not in cache:
+            q = _runs_dir(cfg) / src / "review.yaml"
+            d = (yaml.safe_load(q.read_text()) or {}) if q.is_file() else {}
+            cache[src] = {y["ref"]: y for y in d.get("items", []) + d.get("relations", [])}
+        o = cache[src].get(x["ref"])
+        if o is not None:
+            x["carried_as"] = {"verdict": o.get("verdict"), "comment": o.get("comment")}
+    return old
 
 
 def is_carried(i: dict) -> bool:

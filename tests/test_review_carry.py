@@ -124,6 +124,24 @@ def test_a_new_comment_on_a_carried_accept_reaches_the_note(study, tmp_path):
     assert "r2" not in session.get("note", "")         # an untouched carried verdict adds nothing
 
 
+def test_a_comment_changed_in_an_older_file_still_reaches_the_note(study, tmp_path):
+    cfg, fr, seeds, r1 = _accepted_r1(study, tmp_path)
+    r2 = _next_run(study)
+    report.stability(r2, fr)
+    review.build(r2, fr, since="r1")
+    rv = _rv(r2)                                        # as written before `carried_as` was recorded
+    for i in rv["items"] + rv["relations"]:
+        i.pop("carried_as", None)
+    r2.path("review.yaml").write_text(yaml.safe_dump(rv))
+    _edit_rv(r2, "domain:step", comment="checked again in the later run")
+    review.build(r2, fr)                                # a rebuild of the same run reads what r1 gave
+    review.apply(r2, "reviewer")
+    step = next(c for c in _level(seeds, "domain")["concepts"] if c["id"] == "step")
+    assert "Review (reviewer, r2): checked again in the later run" in step["note"]
+    session = next(c for c in _level(seeds, "domain")["concepts"] if c["id"] == "session")
+    assert "r2" not in session.get("note", "")
+
+
 def test_a_reopened_carried_verdict_is_not_carried_again(study, tmp_path):
     cfg, fr, seeds, r1 = _accepted_r1(study, tmp_path)
     r2 = _next_run(study)
