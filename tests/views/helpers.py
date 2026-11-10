@@ -24,7 +24,15 @@ class RowEngine:
             self.rows.append({"g": m["g"], "s": s, "p": p, "o": o})
         self.graphs = sorted({r["g"][1:-1] for r in self.rows})
 
+    error = None                                   # an exception to raise instead of answering
+    reads = 0
+
     def select_bounded(self, sparql, max_bytes, timeout):
+        if self.error:
+            raise self.error
+        self.reads += 1
+        if "DISTINCT ?g" in sparql:
+            return [{"g": f"<{g}>"} for g in self.graphs]
         wanted = set(re.findall(r"<([^>]+)>", sparql.split("VALUES", 1)[1].split("}", 1)[0]))
         return [r for r in self.rows if r["g"][1:-1] in wanted]
 

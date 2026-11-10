@@ -134,7 +134,7 @@ Use these proposed implementation locations:
 
 These are new modules. Do not introduce production imports from either checkout's `studio/` directory. Extract reusable exporter reading code into the kit and keep the Markdown export behavior covered by its existing tests.
 
-Expose the HTTP adapter as an optional `web` installation extra and planner provider dependencies as a separate `planner` extra. The Python core must remain usable without a web framework, a browser bundle, or an LLM provider. Serve the browser and API from the same origin in the local application. Keep the Open Ontologies bearer token on the Python side and reuse the repository's configured token resolution.
+The HTTP adapter uses the standard library's server, like the kit's other adapters, so it needs no web framework and no installation extra; `ontologizer visualizer` starts it. Planner provider dependencies sit in a separate `planner` extra. The Python core must remain usable without a web framework, a browser bundle, or an LLM provider. Serve the browser and API from the same origin in the local application. Keep the Open Ontologies bearer token on the Python side and reuse the repository's configured token resolution.
 
 ## Scope and snapshot semantics
 

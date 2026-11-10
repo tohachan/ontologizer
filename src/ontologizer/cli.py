@@ -11,6 +11,7 @@
   ontologizer query FILE.rq|SPARQL           SELECT over the store (union of graphs via GRAPH ?g)
   ontologizer consolidation-report [FILE…]   consolidation input from extractions (default paths.application)
   ontologizer consolidate DECISIONS.yaml     apply a consolidation decision file to shared-level and application files
+  ontologizer visualizer [--port 8090]       read-only web view of the ontology (docs/visualizer.md)
 
 Analysis process (docs/process.md), each with --run ID (default `process.run`):
   ontologizer frame init|check               stage 0: frame.md from the template / validate it
@@ -238,6 +239,10 @@ def _frame_or_none(cfg: Config):
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["visualizer"]:
+        from ontologizer.adapters.visualization.server import main as serve
+        return serve(argv[1:])
     p = argparse.ArgumentParser(prog="ontologizer")
     p.add_argument("--config", default=None,
                    help="default: $ONTOLOGIZER_CONFIG, else onto/ontologizer.yaml or ontologizer.yaml at or above cwd")
