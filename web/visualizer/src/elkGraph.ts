@@ -13,12 +13,18 @@ const SIDES: Record<ViewSpec['presentation']['direction'], [string, string]> = {
   RIGHT: ['WEST', 'EAST'], LEFT: ['EAST', 'WEST'], DOWN: ['NORTH', 'SOUTH'], UP: ['SOUTH', 'NORTH'],
 };
 const AREA_PADDING = '[top=40,left=16,bottom=16,right=16]';
+export const BOX_PADDING = { top: 36, side: 14, bottom: 14 };
+const BOX_PAD = `[top=${BOX_PADDING.top},left=${BOX_PADDING.side},bottom=${BOX_PADDING.bottom},right=${BOX_PADDING.side}]`;
+export const boxId = (key: string) => `box:${key}`;
 
 export const inPort = (id: string) => `${id}::in`;
 export const outPort = (id: string) => `${id}::out`;
 
+// `only`: the top-level nodes to lay out (a lane), the rest left out with their edges. `boxes`: a key per
+// top-level node; nodes sharing one sit together in a compound `box:<key>` (a lane's graphs).
 export function toElk(nodes: DNode[], edges: DEdge[], sizes: Map<string, Size>,
-                      direction: ViewSpec['presentation']['direction'] = 'RIGHT'): ElkNode {
+                      direction: ViewSpec['presentation']['direction'] = 'RIGHT',
+                      opts: { only?: Set<string>; boxes?: Map<string, string>; id?: string } = {}): ElkNode {
   const [inSide, outSide] = SIDES[direction];
   const card = (n: DNode): ElkNode => {
     const s = sizes.get(n.id) ?? CARD;
@@ -31,25 +37,59 @@ export function toElk(nodes: DNode[], edges: DEdge[], sizes: Map<string, Size>,
       ],
     };
   };
-  const drawn = nodes.filter((n) => n.kind !== 'annotation');
+  const kept = (n: DNode) => !opts.only || opts.only.has(n.parent ?? n.id);
+  const drawn = nodes.filter((n) => n.kind !== 'annotation' && kept(n));
   const byParent = new Map<string | null, DNode[]>();
   for (const n of drawn) byParent.set(n.parent, [...(byParent.get(n.parent) ?? []), n]);
-  const top = (byParent.get(null) ?? []).map((n) =>
+  const item = (n: DNode): ElkNode =>
     n.kind === 'area'
       ? { id: n.id, layoutOptions: { 'elk.padding': AREA_PADDING }, children: (byParent.get(n.id) ?? []).map(card) }
-      : card(n));
+      : card(n);
+  const top: ElkNode[] = [];
+  const boxed = new Map<string, ElkNode>();
+  for (const n of byParent.get(null) ?? []) {
+    const key = opts.boxes?.get(n.id);
+    if (key === undefined) { top.push(item(n)); continue; }
+    let box = boxed.get(key);
+    if (!box) {
+      box = { id: boxId(key), layoutOptions: { 'elk.padding': BOX_PAD }, children: [] };
+      boxed.set(key, box);
+      top.push(box);
+    }
+    box.children!.push(item(n));
+  }
   const ids = new Set(drawn.map((n) => n.id));
+  // A lane lays out each compound on its own, so that unconnected parts sit side by side instead of in one
+  // tall column; ELK then routes only edges inside one compound, and the others are drawn between cards.
+  const lane = !!opts.only;
+  const parentOf = new Map(drawn.map((n) => [n.id, n.parent ?? (opts.boxes?.get(n.id) ?? '')]));
   const elkEdges: ElkExtendedEdge[] = edges
     .filter((e) => ids.has(e.source) && ids.has(e.target) && e.source !== e.target)
+    .filter((e) => !lane || parentOf.get(e.source) === parentOf.get(e.target))
     .map((e) => ({ id: e.id, sources: [outPort(e.source)], targets: [inPort(e.target)] }));
+  // in a lane an edge belongs to the compound that holds both its cards
+  const src = new Map(elkEdges.map((e) => [e.id, e.sources[0].slice(0, -'::out'.length)]));
+  const container = (e: ElkExtendedEdge) => parentOf.get(src.get(e.id)!) ?? '';
+  if (lane) {
+    const compounds = new Map<string, ElkNode>();
+    for (const t of top) { compounds.set(t.id, t); for (const c of t.children ?? []) if (c.children?.length) compounds.set(c.id, c); }
+    for (const e of elkEdges) {
+      const c = container(e);
+      if (!c) continue;
+      const holder = compounds.get(c) ?? compounds.get(boxId(c));
+      if (holder) holder.edges = [...(holder.edges ?? []), e];
+    }
+  }
   return {
-    id: 'root',
+    id: opts.id ?? 'root',
     layoutOptions: {
-      'elk.algorithm': 'layered', 'elk.direction': direction, 'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
+      'elk.algorithm': 'layered', 'elk.direction': direction,
+      'elk.hierarchyHandling': lane ? 'SEPARATE_CHILDREN' : 'INCLUDE_CHILDREN',
+      ...(lane ? { 'elk.layered.layering.strategy': 'MIN_WIDTH', 'elk.aspectRatio': '1.6' } : {}),
       'elk.edgeRouting': 'ORTHOGONAL', 'elk.layered.spacing.nodeNodeBetweenLayers': '80',
       'elk.spacing.nodeNode': '32', 'elk.json.edgeCoords': 'ROOT', 'elk.json.shapeCoords': 'PARENT',
     },
-    children: top, edges: elkEdges,
+    children: top, edges: lane ? elkEdges.filter((e) => container(e) === '') : elkEdges,
   };
 }
 

@@ -297,7 +297,7 @@ export function App() {
             ? <ReactFlowProvider>
                 <Actions compilation={compilation} picked={picked} onAction={onAction} busy={busy} />
                 <Canvas key={canvasKey} compilation={compilation} picked={picked} onPick={onPick} direction={sel.layout.direction}
-                        initialLayout={initialLayout} layoutRef={layoutRef} />
+                        initialLayout={initialLayout} layoutRef={layoutRef} defaultLanes levelOrder={ownerCat?.levels ?? NO_LEVELS} />
               </ReactFlowProvider>
             : <p className="muted placeholder">{owner ? 'Choose graphs and starting concepts, then show the diagram.' : 'Choose an owner.'}</p>}
         </section>
@@ -362,6 +362,7 @@ function Ask({ onAsk, busy, candidates, onPick }: { onAsk: (q: string) => void; 
 }
 
 export const NODE_LIMITS = [40, 80, 120, 160, 200];
+const NO_LEVELS: string[] = [];
 const MAX_NODES = 200;
 
 function LimitHelp({ hit, byLevel, onRaise }: { hit: { count: number; limit: number }; byLevel: boolean; onRaise: (n: number) => void }) {

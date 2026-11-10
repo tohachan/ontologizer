@@ -14,6 +14,13 @@ export class LayoutRunner {
     return mine === this.latest ? result : null;
   }
 
+  // Several graphs laid out as one request (the lanes of one view).
+  async runAll(graphs: ElkNode[]): Promise<ElkNode[] | null> {
+    const mine = ++this.latest;
+    const results = await Promise.all(graphs.map((g) => this.engine(g)));
+    return mine === this.latest ? results : null;
+  }
+
   cancel(): void {
     this.latest++;
   }

@@ -4,11 +4,16 @@ import type { DNode } from './types';
 
 type Props = NodeProps & { data: { node: DNode } };
 
+// Left and right carry the flow; top and bottom carry an edge to a lane above or below (lanes.ts).
 function Ports() {
   return (
     <>
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
+      <Handle id="top-out" type="source" position={Position.Top} className="lane-port" />
+      <Handle id="top-in" type="target" position={Position.Top} className="lane-port" />
+      <Handle id="bottom-out" type="source" position={Position.Bottom} className="lane-port" />
+      <Handle id="bottom-in" type="target" position={Position.Bottom} className="lane-port" />
     </>
   );
 }
@@ -60,7 +65,16 @@ export function NoteNode({ data, selected }: Props) {
   return <div className={`note${selected ? ' selected' : ''}`} aria-label="annotation">✎ {data.node.label}</div>;
 }
 
-export const nodeTypes = { concept: ConceptCard, aggregate: AggregateCard, area: AreaNode, annotation: NoteNode };
+// A lane or a graph box: drawn behind the cards, never picked or dragged.
+export function BandNode({ data }: NodeProps & { data: { label: string; kind: 'lane' | 'box' } }) {
+  return (
+    <div className={`band ${data.kind}`} aria-label={`${data.kind === 'lane' ? 'level' : 'graph'} ${data.label}`}>
+      <div className="band-title">{data.label}</div>
+    </div>
+  );
+}
+
+export const nodeTypes = { concept: ConceptCard, aggregate: AggregateCard, area: AreaNode, annotation: NoteNode, band: BandNode };
 
 export function memberNames(n: DNode): string {
   return n.members.map(localName).join(', ');

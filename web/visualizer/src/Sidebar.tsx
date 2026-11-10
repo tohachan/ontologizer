@@ -156,7 +156,8 @@ export function Sidebar(p: Props) {
             <option value="RIGHT">left to right</option><option value="LEFT">right to left</option>
             <option value="DOWN">top to bottom</option><option value="UP">bottom to top</option></select></label>
           <label>Show up to <select value={s.layout.maxNodes} aria-label="node limit"
-                  onChange={(e) => set({ layout: { ...s.layout, maxNodes: Number(e.target.value) } })}>
+                  onChange={(e) => { const n = Number(e.target.value);       // edges grow with nodes, never shrink here
+                    set({ layout: { ...s.layout, maxNodes: n, maxEdges: Math.max(s.layout.maxEdges, Math.min(400, 2 * n)) } }); }}>
             {[...new Set([40, 80, 120, 160, 200, s.layout.maxNodes])].sort((a, b) => a - b).map((n) => <option key={n} value={n}>{n}</option>)}
           </select> nodes and <select value={s.layout.maxEdges} aria-label="edge limit"
                   onChange={(e) => set({ layout: { ...s.layout, maxEdges: Number(e.target.value) } })}>

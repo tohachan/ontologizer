@@ -360,6 +360,14 @@ If rendering ELK's orthogonal routes, implement an edge component that uses its 
 
 Dragging changes LayoutState only. Refresh does not automatically rerun a full layout. Place newly appearing nodes near related nodes and mark new elements; offer an explicit auto-layout action for the complete view. A deliberate full layout may reposition unpinned nodes. For version 1, a full automatic layout is available only when no nodes are pinned. If pins exist, offer to preserve the current positions or explicitly unlock them before full layout. Local placement of new nodes may leave overlaps to resolve manually. Do not assume arbitrary pin constraints are automatically respected by ELK.
 
+**Lanes by level** (on by default, a switch on the canvas):
+
+- Each abstraction level is laid out by itself as a lane. Lanes follow the preset's order (top, domain, task, application), then the other levels, then concepts without a level.
+- Lanes run across the flow: with edges running right or left they are rows from the top, with edges running down or up they are columns from the left. A group goes in the lane of its members' shared level.
+- Inside a lane, ELK lays out each compound separately (`SEPARATE_CHILDREN`, minimum-width layering), so unconnected parts sit side by side instead of in one tall column. In a lane holding concepts of more than one graph, each graph's concepts sit in a labelled box.
+- ELK routes only edges inside one compound. An edge between boxes is drawn between its cards. An edge between lanes, such as a mapping, is a straight line from the top or bottom of its card toward the other lane. Mappings have their own colour as well as their dashes.
+- Bands are drawn from where the cards are, so they follow a drag. A saved layout records whether it used lanes (`elkjs-0.12.0/layered+lanes`) and opens the same way.
+
 Ignore stale worker results when a newer layout request exists. Layout failure leaves the last valid diagram visible and offers retry. Use text and accessible markers in addition to color to distinguish source, aggregate, and summary elements.
 
 ## Application API
