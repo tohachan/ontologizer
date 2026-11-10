@@ -94,3 +94,4 @@ button.primary { background: var(--accent); color: #fff; border: 0; padding: 8px
 .agent-choice { display: flex; flex-direction: column; gap: 4px; }
 .model-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; } .model-row select { max-width: 11em; }
 .owner-name { font-size: 13px; color: var(--muted); }
+.layout-panel select { max-width: 190px; }
