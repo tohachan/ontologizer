@@ -219,6 +219,7 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
     unverified_total = removed_total = 0
     ev_kinds: dict[str, list[int]] = {}
     cov_num = cov_den = 0
+    cov_kinds: dict[str, dict] = {}
     unmeasured = []
     for p in projects:
         row: dict = {}
@@ -228,12 +229,19 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
             row["coverage"] = "unmeasured"
             unmeasured.append(p)
         elif app is not None:
-            counted = {c["id"] for c in inv["candidates"] if c.get("counted")}
+            from ontologizer.core.inventory import ACCOUNTED_KINDS
+            cands = [c for c in inv["candidates"] if c.get("counted")]
+            counted = {c["id"] for c in cands if c.get("kind") not in ACCOUNTED_KINDS}
             cited = {x for c in app["concepts"] for x in c.get("inventory", [])} & counted
             row["coverage"] = round(len(cited) / len(counted), 3) if counted else None
             row["inventory"] = {"counted": len(counted), "covered": len(cited), "total": inv.get("total")}
             cov_num += len(cited)
             cov_den += len(counted)
+            row["inventory_by_kind"] = _coverage_by_kind(cands, app)
+            for k, x in row["inventory_by_kind"].items():
+                acc = cov_kinds.setdefault(k, {"counted": 0, "listed": 0, "cited_only": 0, "missing": 0})
+                for f in acc:
+                    acc[f] += x[f]
         rec = load_json(run.path("reconcile", f"{p}.json"))
         if rec:
             row["agreement"] = rec["agreement"]
@@ -298,6 +306,8 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
                     "families": r["families"]} for ref, r in st["concepts"].items()}
     metrics = {
         "inventory_coverage": round(cov_num / cov_den, 3) if cov_den else "unmeasured",
+        "inventory_coverage_by_kind": {k: {**x, "share": round(x["listed"] / x["counted"], 3) if x["counted"] else None}
+                                       for k, x in sorted(cov_kinds.items())} or None,
         "inventory_unmeasured": unmeasured,
         "extraction_agreement": round(sum(agree) / len(agree), 3) if agree else None,
         "extraction_agreement_all": round(sum(agree_all) / len(agree_all), 3) if agree_all else None,
@@ -342,12 +352,51 @@ def _fmt(v) -> str:
     return str(v)
 
 
+def _coverage_by_kind(cands: list[dict], app: dict) -> dict[str, dict]:
+    """Per inventory kind: candidates `listed` in an `inventory` field of the extraction (a concept for types and
+    concepts; a concept, relation, caveat or absence for the others), those only `cited_only` (no list names them,
+    but evidence cites their declaring line), and the `missing` rest, with their ids."""
+    from ontologizer.core.inventory import ACCOUNTED_KINDS, accounted_ids
+    in_concepts = {x for c in app.get("concepts", []) for x in c.get("inventory", [])}
+    anywhere = accounted_ids(app)
+    spans: dict[str, list[tuple[int, int]]] = {}
+
+    def walk(o):
+        if isinstance(o, dict):
+            if o.get("path") and o.get("lines"):
+                for part in str(o["lines"]).split(","):
+                    a, _, b = part.strip().partition("-")
+                    if a.strip().isdigit():
+                        spans.setdefault(o["path"], []).append((int(a), int(b) if b.strip().isdigit() else int(a)))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk({k: app.get(k) for k in ("concepts", "relations", "caveats", "absences", "variation")})
+    out: dict[str, dict] = {}
+    for c in cands:
+        k = c.get("kind") or "other"
+        x = out.setdefault(k, {"counted": 0, "listed": 0, "cited_only": 0, "missing": 0, "missing_ids": []})
+        x["counted"] += 1
+        if c["id"] in (anywhere if k in ACCOUNTED_KINDS else in_concepts):
+            x["listed"] += 1
+            continue
+        line = int(str(c.get("lines") or "0").split("-")[0] or 0)
+        if line and any(a <= line <= b for a, b in spans.get(c.get("path"), [])):
+            x["cited_only"] += 1
+        else:
+            x["missing"] += 1
+            x["missing_ids"].append(c["id"])
+    return out
+
+
 def render(doc: dict) -> str:
     m = doc["metrics"]
     j = m["jev_llm_disagreement"]
     lines = [f"# Run report: {doc['run']}", "", f"Study `{doc['study']}`, {len(doc['projects'])} projects, "
              f"generated {doc['at']}.", "", "## Metrics", "", "| Metric | Value |", "| --- | --- |",
-             f"| Inventory coverage | {_fmt(m['inventory_coverage'])} |",
+             f"| Inventory coverage (kinds that concepts cover) | {_fmt(m['inventory_coverage'])} |",
              f"| Extraction agreement (mean) | {_fmt(m['extraction_agreement'])} |",
              f"| Recheck change rate by item type (stage 6) | "
              f"{', '.join(f'{k} {v:.3f}' for k, v in (m.get('recheck_change_rate') or {}).items()) or '—'} |",
@@ -395,6 +444,19 @@ def render(doc: dict) -> str:
         ver = (r.get("verification") or {}).get("share")
         lines.append(f"| {p} | {_fmt(r.get('concepts'))} | {_fmt(r.get('mapped'))} | {_fmt(r.get('coverage'))} | "
                      f"{_fmt(r.get('agreement_mean'))} | {_fmt(ver)} | {_fmt(r.get('absences'))} |")
+    kinds = {p: (doc["per_project"].get(p) or {}).get("inventory_by_kind") for p in doc["projects"]}
+    if any(kinds.values()):
+        lines += ["", "## Inventory coverage by kind", "",
+                  "Listed: named in an `inventory` field (a concept's for types and concepts; a concept's, relation's, "
+                  "caveat's or absence's for the other kinds). Cited only: no list names it, but evidence cites its "
+                  "line. Missing: neither.", "",
+                  "| Project | Kind | Counted | Listed | Cited only | Missing | Missing ids |",
+                  "| --- | --- | --- | --- | --- | --- | --- |"]
+        for p, ks in kinds.items():
+            for k, x in sorted((ks or {}).items()):
+                ids = ", ".join(f"`{i}`" for i in x["missing_ids"][:12]) + (" …" if len(x["missing_ids"]) > 12 else "")
+                lines.append(f"| {p} | {k} | {x['counted']} | {x['listed']} | {x['cited_only']} | {x['missing']} | "
+                             f"{ids or '—'} |")
     lines += ["", "## Shared concepts", "", "| Concept | Level | Mark | Families | Projects |", "| --- | --- | --- | --- | --- |"]
     for ref, s in sorted(doc["shared"].items()):
         lines.append(f"| {s['label']} (`{ref}`) | {s['level']} | {s['mark']} | {', '.join(s['families'])} | "

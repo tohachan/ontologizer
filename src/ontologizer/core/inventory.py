@@ -22,6 +22,21 @@ TRIAGE = {
 }
 STATE_BATCH = 20
 
+# Candidates an extraction accounts for elsewhere than in a concept's `inventory`: a property in the relation or
+# concept that carries it, a shape in the caveat that states its rule, an individual in the caveat that reports it
+# as an example (or the concept it is a worked instance of), a scheme or header in the caveat on the source's form.
+# They are counted per kind; the headline `inventory_coverage` stays over the other kinds, which concepts cover.
+ACCOUNTED_KINDS = ("property", "shape", "individual", "scheme", "ontology")
+
+
+def accounted_ids(app: dict) -> set[str]:
+    """Every inventory id an extraction lists: in concepts, relations, and object-form caveats and absences."""
+    out = {x for c in app.get("concepts", []) for x in c.get("inventory", [])}
+    out |= {x for r in app.get("relations", []) for x in r.get("inventory", [])}
+    for key in ("caveats", "absences"):
+        out |= {x for c in app.get(key, []) if isinstance(c, dict) for x in c.get("inventory", [])}
+    return out
+
 
 def source(run: Run):
     conf = run.cfg.data.get("inventory")

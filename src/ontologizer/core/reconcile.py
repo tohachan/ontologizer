@@ -351,14 +351,20 @@ def apply(run: Run, project: str, out: Path) -> dict:
         c.pop("broader", None)
         if broader - {c["id"]}:
             c["broader"] = sorted(broader - {c["id"]})
-    rels, seen = [], set()
+    rels, seen = [], {}
     for e in order:
         for r in exs[e].get("relations", []):
             f, t = id_of_ref.get(f"{e}:{r['from']}"), id_of_ref.get(f"{e}:{r['to']}")
-            if not f or not t or f == t or (f, r["type"], t) in seen:
+            if not f or not t or f == t:
                 continue
-            seen.add((f, r["type"], t))
-            rels.append({**r, "from": f, "to": t})
+            if (f, r["type"], t) in seen:     # the same relation from another extractor: keep what it accounts for
+                kept = seen[(f, r["type"], t)]
+                more = [x for x in r.get("inventory", []) if x not in kept.get("inventory", [])]
+                if more:
+                    kept["inventory"] = kept.get("inventory", []) + more
+                continue
+            seen[(f, r["type"], t)] = {**r, "from": f, "to": t}
+            rels.append(seen[(f, r["type"], t)])
     first = exs[order[0]]
     doc = {k: v for k, v in first.items() if k not in ("concepts", "relations", "extractor", "absences", "caveats",
                                                          "variation", "proposed_values", "proposed_shared")}
