@@ -1,14 +1,19 @@
 import { ReactFlowProvider } from '@xyflow/react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Actions, type Action } from './Actions';
+import { Agent } from './Agent';
+import type { AgentView, ViewEvent } from './agentTypes';
 import { api, ApiFailure } from './api';
 import { Canvas } from './Canvas';
 import { Inspector } from './Inspector';
-import { Sidebar, type Selection } from './Sidebar';
+import { recall, remember } from './remember';
+import { Sidebar, TABS, type Selection, type SidebarTab } from './Sidebar';
 import * as ops from './ops';
 import { buildSpec, fromSpec, scopeKey } from './spec';
-import type { Artifact, Catalog, Compilation, Layout, OwnerCatalog, SavedView, SearchHit } from './types';
+import type { Artifact, Catalog, Compilation, Layout, OwnerCatalog, SavedView, SearchHit, ViewSpec } from './types';
 import { download, slug, Views } from './Views';
+
+export const TAB_KEY = 'visualizer.sidebarTab';
 
 const START: Selection = {
   primary: [], context: [], languages: ['en', 'ru'], seeds: [], excluded: [], levels: [],
@@ -53,6 +58,9 @@ export function App() {
   const layoutRef = useRef<(() => Layout) | null>(null);
   const snapshot = useRef<{ key: string; id: string } | null>(null);
   const request = useRef(0);
+  const [tab, setTab] = useState<SidebarTab>(() => recall(TAB_KEY, TABS, 'agent'));
+  const chooseTab = useCallback((t: SidebarTab) => { setTab(t); remember(TAB_KEY, t); }, []);
+  const undoTo = useRef(new Map<string, ViewSpec>());        // per agent entry: the page's spec before it
 
   useEffect(() => { api.catalog().then(setCatalog, (e) => setError(describe(e))); }, []);
 
@@ -60,7 +68,7 @@ export function App() {
     request.current++;                                       // an answer still on its way belongs to the old view
     setOwner(o); setOwnerCat(null); setHits([]); setCompilation(null); setPicked([]); setFocus(null); setBusy(false);
     setExtra(ops.EMPTY);
-    snapshot.current = null;
+    snapshot.current = null; undoTo.current.clear();
     setOpened({ id: 'untitled', title: '', revision: null }); setInitialLayout(null); setCanvasKey((k) => k + 1);
     api.views(o).then((v) => setViews(v.views), () => setViews([]));
     api.ownerCatalog(o).then((c) => {
@@ -246,6 +254,33 @@ export function App() {
     }
   }, [owner, sel, extra, opened, apply]);
 
+  // A spec from the agent (docs/visualizer-agent.md §4) is applied as any view operation: the same compile,
+  // the snapshot reused while the scope is unchanged, the arrangement kept when the spec names none.
+  const applySpec = useCallback((spec: ViewSpec) => {
+    const { s, x } = keepArrangement(fromSpec(spec, sel), sel);
+    return apply(s, x);
+  }, [apply, sel]);
+
+  // The open view as the agent sees it; read when a chat request goes, and moved on by each applied entry.
+  const pageSpec = useRef<ViewSpec | null>(null);
+  pageSpec.current = buildSpec(sel, extra, opened.id, opened.title || 'Untitled view');
+  const agentView = useRef<AgentView | null>(null);
+  agentView.current = { spec: pageSpec.current, compileId: compilation?.compileId ?? null, picked };
+  const viewForAgent = useCallback(() => agentView.current!, []);
+  const onAgentView = useCallback((id: string, ev: ViewEvent) => {
+    if (!undoTo.current.has(id) && pageSpec.current) undoTo.current.set(id, pageSpec.current);
+    pageSpec.current = ev.spec;
+    void applySpec(ev.spec);
+  }, [applySpec]);
+  // Undo is the page's own: back to the spec before that entry, without asking the agent.
+  const onAgentUndo = useCallback((id: string) => {
+    const before = undoTo.current.get(id);
+    if (!before) return;
+    pageSpec.current = before;
+    void applySpec(before);
+  }, [applySpec]);
+  const unpick = useCallback((id: string) => { setPicked((ps) => ps.filter((x) => x !== id)); setFocus((f) => (f === id ? null : f)); }, []);
+
   const onAction = useCallback((a: Action) => {
     if (!compilation) return;
     const nodes = compilation.diagram.nodes;
@@ -281,6 +316,7 @@ export function App() {
   // orientation is drawn at once; everything else in the sidebar takes a compile
   const pending = !!compiledSpec && !busy && (!sameSelection || JSON.stringify(drawn(compiledSpec)) !== JSON.stringify(drawn(current)));
   const shownFrom = sameScope ? contextCards(compilation!) : null;
+  const chips = picked.map((id) => ({ id, label: pickedLabel(compilation, id) }));
   return (
     <div className="app">
       <header>
@@ -326,7 +362,9 @@ export function App() {
                  facts={sameScope ? compilation!.scopeFacts : null}
                  filteredByLevel={sameSelection ? compilation?.diagram.counts.filteredByLevel : undefined}
                  shownFrom={shownFrom} cut={!!counts?.omittedNodes} pending={pending}
-                 onOverview={(v) => void overview(v)}>
+                 onOverview={(v) => void overview(v)} tab={tab} onTab={chooseTab}
+                 agent={<Agent owner={owner} view={viewForAgent} onView={onAgentView} onUndo={onAgentUndo}
+                               picked={chips} onUnpick={unpick} onSettings={() => chooseTab('settings')} />}>
           {owner && catalog?.planner.enabled && sel.primary.length > 0 &&
             <Ask onAsk={(q) => void ask(q)} busy={busy} candidates={candidates}
                  onPick={(iri) => { setCandidates([]); void apply({ ...sel, seeds: [...sel.seeds.filter((x) => x.iri !== iri), { iri, label: iri.split(/[#/:]/).pop() ?? iri }] }, extra); }} />}
@@ -408,6 +446,15 @@ function Ask({ onAsk, busy, candidates, onPick }: { onAsk: (q: string) => void; 
 function drawn(spec: ReturnType<typeof buildSpec>) {
   const { direction: _d, arrangement: _a, ...rest } = spec.presentation;
   return [rest, spec.groups, spec.summaries, spec.annotations];
+}
+
+// What a picked card or link is called in the chat's context chips.
+function pickedLabel(c: Compilation | null, id: string): string {
+  const n = c?.diagram.nodes.find((x) => x.id === id);
+  if (n) return n.label || id;
+  const e = c?.diagram.edges.find((x) => x.id === id);
+  if (e) return e.label || `${e.type.split(/[#/:]/).pop()} link`;
+  return id;
 }
 
 // The cards of each linked (context) graph in a diagram.
