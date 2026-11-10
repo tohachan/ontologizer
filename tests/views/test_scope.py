@@ -91,14 +91,26 @@ def test_other_owners_graph_may_be_context_when_listed(owners):
 
 
 @pytest.mark.parametrize("primary,context", [
-    (["projects/a@0.1"], ["projects/b"]),
-    (["projects/a"], ["shared/domain@0.1"]),
     (["projects/a", "projects/a@0.1"], []),
-], ids=["release-with-working-context", "working-with-release-context", "mixed-primary"])
-def test_working_and_release_never_mix(owners, primary, context):
+    (["projects/a"], ["projects/a@0.1"]),
+    (["shared/domain"], ["shared/domain@0.1"]),
+], ids=["both-primary", "release-as-context-of-its-working-graph", "shared-graph-twice"])
+def test_one_version_of_each_graph(owners, primary, context):
     cfg = owners.config("study")
-    with pytest.raises(OutOfScope, match="release"):
+    with pytest.raises(OutOfScope, match="two versions of one graph"):
         resolve(cfg, catalog(cfg, STORE), primary=primary, context=context)
+
+
+@pytest.mark.parametrize("primary,context", [
+    (["projects/a"], ["shared/domain@0.1"]),
+    (["projects/a@0.1"], ["projects/b"]),
+    (["projects/b", "shared/domain@0.1"], []),
+], ids=["working-maps-to-a-release", "release-with-working-context", "mixed-primary-of-different-graphs"])
+def test_different_graphs_may_be_at_different_versions(owners, primary, context):
+    """A working project graph mapped against a released shared graph reads that release for its targets."""
+    cfg = owners.config("study")
+    s = resolve(cfg, catalog(cfg, STORE), primary=primary, context=context)
+    assert sorted(g.path for g in (*s.primary, *s.context)) == sorted(primary + context)
 
 
 def test_release_scope_takes_kit_graphs_and_releases_as_context(owners):

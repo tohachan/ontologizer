@@ -397,3 +397,43 @@ def test_the_inspector_gets_candidate_mappings_and_project_variation(tmp_path):
     (ent,) = call(app, "GET", f"compilations/{out['compileId']}/elements/{order['id']}")[1]["entities"]
     assert [c["candidateLabel"] for c in ent["candidates"]] == ["Ledger"]
     assert ent["project"]["variation"][0]["value"] == f"{D}Val"
+
+
+MAPPED = f"""
+@prefix ok: <urn:ontologizer:kit:> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
+<{G}projects/demo> {{
+  <urn:ontologizer:projects/demo:Cart> a ok:Concept ; skos:prefLabel "Cart"@en ; ok:level <urn:ontologizer:kit:level/application> .
+  <urn:ontologizer:projects/demo:m1> a ok:Mapping ; ok:mappingSource <urn:ontologizer:projects/demo:Cart> ;
+      ok:mappingKind ok:specialization ; ok:mappingTarget <urn:ontologizer:shared/domain@0.1:Order> .
+}}
+<{G}shared/domain> {{ <{D}Order> a ok:Concept ; skos:prefLabel "Order"@en ; ok:level <urn:ontologizer:kit:level/domain> . }}
+<{G}shared/domain@0.1> {{
+  <urn:ontologizer:shared/domain@0.1:Order> a ok:Concept ; skos:prefLabel "Order"@en ; ok:level <urn:ontologizer:kit:level/domain> .
+}}
+"""
+
+
+def test_scope_facts_name_the_graph_a_mapping_points_to(tmp_path):
+    """A working project graph mapped against a release: the compile says where the targets are, and the
+    scope that lists that release shows the mapping."""
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    app = Visualizer(Owners(hub), ScopedReader(RowEngine(MAPPED), Limits()), Settings(allowed_hosts=(HOST,)))
+    def run(context, levels=("application", "domain")):
+        s = spec(entities=[], levels=list(levels), relationKinds=["kit-relation", "kit-mapping"])
+        s["scope"] = {"primaryGraphs": ["projects/demo"], "contextGraphs": context}
+        status, body = call(app, "POST", "compile", {"owner": "study", "spec": s})
+        assert status == 200, body
+        return body
+    alone = run([])["scopeFacts"]
+    assert {k["kind"]: (k["inScope"], k["outside"]) for k in alone["kinds"]}["kit-mapping"] == (0, 1)
+    assert alone["outside"] == [{"graph": "shared/domain@0.1", "kind": "kit-mapping", "relationships": 1,
+                                 "available": True, "instead": None}]
+    working = run(["shared/domain"])["scopeFacts"]["outside"]
+    assert working[0]["graph"] == "shared/domain@0.1" and working[0]["instead"] == "shared/domain"
+    with_release = run(["shared/domain@0.1"])
+    assert with_release["scopeFacts"]["outside"] == []
+    assert [e["kind"] for e in with_release["diagram"]["edges"]] == ["kit-mapping"]
+    one_level = run(["shared/domain@0.1"], levels=["application"])     # the target's level is not selected
+    assert one_level["diagram"]["edges"] == [] and one_level["diagram"]["counts"]["hiddenByRule"] == 1

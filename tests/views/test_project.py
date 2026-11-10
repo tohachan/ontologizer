@@ -284,3 +284,30 @@ def test_a_level_selection_over_the_limit_is_cut_and_counted_not_refused():
                           presentation={"maxNodes": 80}), scope(), model(many, []))
     assert d.counts.shown_nodes == 80 and d.counts.omitted_nodes == 38
     assert iris(d) == sorted(e.iri for e in many)[:80]                # a fixed order: the same cut every time
+
+
+def test_scope_facts_count_each_kind_in_scope_and_outside_it():
+    """The sidebar's counts: what a kind could show in this scope, and where its other targets are."""
+    from ontologizer.core.views.project import scope_facts
+    ents = [entity("A"), entity("B"), entity("S", graph=CTX), entity("K", graph=UP, level=None, iri=GUFO + "Kind")]
+    rels = [rel("A", "B"), rel("A", "S", kind="kit-mapping", type_="urn:ontologizer:kit:equivalence"),
+            rel("A", "urn:elsewhere@0.2:T", kind="kit-mapping", type_="urn:ontologizer:kit:partial"),
+            rel("B", "urn:elsewhere@0.2:T", kind="kit-mapping", type_="urn:ontologizer:kit:partial"),
+            rel("A", GUFO + "Kind", kind="class-inheritance", type_="rdfs:subClassOf"),
+            rel("S", "B", graph=CTX)]                     # from a context concept: not this scope's own
+    facts = {f.kind: f for f in scope_facts(scope(), model(ents, rels))}
+    assert (facts["kit-relation"].in_scope, dict(facts["kit-relation"].outside)) == (1, {})
+    assert facts["kit-mapping"].in_scope == 1 and dict(facts["kit-mapping"].outside) == {"urn:elsewhere@0.2:T": 2}
+    assert facts["class-inheritance"].in_scope == 0                # the upper superclass is a marker
+    assert facts["rdf-assertion"].in_scope == 0
+
+
+def test_a_card_names_its_graph_and_a_group_its_shared_level():
+    ents = [entity("A"), entity("B"), entity("S", graph=CTX, level="task")]
+    rels = [rel("A", "B"), rel("A", "S", kind="kit-mapping", type_="urn:ontologizer:kit:equivalence")]
+    d = compile_view(spec(groups=[{"id": "g", "title": "G", "members": [X + "A", X + "B"], "collapsed": True},
+                                  {"id": "h", "title": "H", "members": [X + "S"], "collapsed": False}]),
+                     scope(), model(ents, rels))
+    by = {n.id: n for n in d.nodes}
+    assert by["aggregate:g"].level == "domain" and by["area:h"].level == "task"
+    assert {n.label: n.graph for n in d.nodes if n.kind == "concept"} == {"S": "shared/domain"}

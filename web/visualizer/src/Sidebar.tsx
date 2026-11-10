@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
-import type { GraphEntry, RelationKind, SearchHit, ViewSpec } from './types';
+import { contextRows, currentVersion, ownVersions, switchVersion, versionOf, withContext, WORKING } from './scopeRows';
+import type { GraphEntry, RelationKind, ScopeFacts, SearchHit, ViewSpec } from './types';
 
 export type Selection = {
   primary: string[]; context: string[]; languages: string[];
@@ -19,7 +20,11 @@ type Props = {
   graphs: GraphEntry[]; levels: string[]; sel: Selection; onChange: (s: Selection) => void;
   onSearch: (q: string) => void; hits: SearchHit[]; searching: boolean;
   onCompile: () => void; busy: boolean; onUnhide: (iri: string) => void; children?: ReactNode;
+  facts?: ScopeFacts | null;                             // of the last diagram, when it has this scope
+  hiddenByRule?: number;
 };
+
+const versionName = (v: string) => (v === WORKING ? 'working graphs' : `release ${v}`);
 
 function toggle<T>(list: T[], v: T): T[] {
   return list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
@@ -29,9 +34,12 @@ export function Sidebar(p: Props) {
   const [q, setQ] = useState('');
   const s = p.sel;
   const set = (patch: Partial<Selection>) => p.onChange({ ...s, ...patch });
-  const own = p.graphs.filter((g) => g.own);
-  const releaseScope = s.primary.some((x) => x.includes('@'));
-  const others = p.graphs.filter((g) => !g.own && (g.owner === null || (g.release !== null) === releaseScope));
+  const versions = ownVersions(p.graphs);
+  const version = currentVersion(p.graphs, s.primary);
+  const own = p.graphs.filter((g) => g.own && versionOf(g) === version);
+  const rows = contextRows(p.graphs);
+  const kindFacts = new Map(p.facts?.kinds.map((k) => [k.kind, k]) ?? []);
+  const byLevel = s.seeds.length === 0 && s.levels.length > 0;
   return (
     <nav className="sidebar" aria-label="view settings">
       <label>Owner{' '}
@@ -44,16 +52,37 @@ export function Sidebar(p: Props) {
       {p.owner && (
         <>
           <fieldset><legend>Graphs of this owner</legend>
+            {versions.length > 1 && (
+              <label className="row">Version <select aria-label="version" value={version}
+                onChange={(e) => set({ primary: switchVersion(p.graphs, s.primary, e.target.value) })}>
+                {versions.map((v) => <option key={v} value={v}>{versionName(v)}</option>)}</select></label>
+            )}
             {own.map((g) => (
               <label key={g.path} className="row"><input type="checkbox" checked={s.primary.includes(g.path)}
                 onChange={() => set({ primary: toggle(s.primary, g.path) })} /> {g.path}{g.level ? ` [${g.level}]` : ''}</label>
             ))}
           </fieldset>
           <fieldset><legend>Context</legend>
-            {others.map((g) => (
-              <label key={g.path} className="row"><input type="checkbox" checked={s.context.includes(g.path)}
-                onChange={() => set({ context: toggle(s.context, g.path) })} /> {g.path}</label>
-            ))}
+            <p className="muted">Read for definitions, labels and the targets of links; one version of each graph.</p>
+            {rows.map((r) => {
+              const chosen = r.versions.find((g) => s.context.includes(g.path));
+              const tag = r.level ? ` [${r.level}]` : '';
+              if (r.versions.length === 1) {
+                const g = r.versions[0];
+                return (
+                  <label key={r.base} className="row"><input type="checkbox" checked={!!chosen}
+                    onChange={() => set({ context: withContext(p.graphs, s.context, r.base, chosen ? null : g.path) })} /> {g.path}{tag}</label>
+                );
+              }
+              return (
+                <label key={r.base} className="row">{r.base}{tag}{' '}
+                  <select aria-label={`version of ${r.base}`} value={chosen?.path ?? ''}
+                    onChange={(e) => set({ context: withContext(p.graphs, s.context, r.base, e.target.value || null) })}>
+                    <option value="">not read</option>
+                    {r.versions.map((g) => <option key={g.path} value={g.path}>{g.release ? `release ${g.release}` : 'working'}</option>)}
+                  </select></label>
+              );
+            })}
           </fieldset>
           <form onSubmit={(e) => { e.preventDefault(); if (q.trim()) p.onSearch(q.trim()); }}>
             <label>Find concepts <input value={q} onChange={(e) => setQ(e.target.value)} aria-label="search" placeholder="label or definition" /></label>
@@ -89,17 +118,39 @@ export function Sidebar(p: Props) {
               <label key={lv} className="row"><input type="checkbox" checked={s.levels.includes(lv)}
                 onChange={() => set({ levels: toggle(s.levels, lv) })} /> {lv}</label>
             ))}
+            {s.levels.length > 0 && !!p.hiddenByRule && (
+              <p className="hint" aria-label="filtered by level">{p.hiddenByRule} linked concept(s) are at levels not ticked here, so they are not shown.</p>
+            )}
           </fieldset>
           <fieldset><legend>Relationships</legend>
-            {KINDS.map(([k, name]) => (
-              <label key={k} className="row"><input type="checkbox" checked={s.kinds.includes(k)}
-                onChange={() => set({ kinds: toggle(s.kinds, k) })} /> {name}</label>
+            {KINDS.map(([k, name]) => {
+              const f = kindFacts.get(k);
+              const none = f && f.inScope === 0 && f.outside === 0;
+              return (
+                <label key={k} className={`row${none ? ' muted' : ''}`}><input type="checkbox" checked={s.kinds.includes(k)}
+                  onChange={() => set({ kinds: toggle(s.kinds, k) })} /> {name}
+                  {f && <span className="tag" aria-label={`${name} in scope`}>
+                    {none ? 'none in these graphs' : `${f.inScope} in scope${f.outside ? `, ${f.outside} point outside` : ''}`}</span>}
+                </label>
+              );
+            })}
+            {p.facts?.outside.map((o) => (
+              <p key={`${o.graph}|${o.kind}`} className="hint" aria-label="links outside the scope">
+                {o.relationships} {KINDS.find(([k]) => k === o.kind)?.[1]} point to {o.graph ?? 'concepts in no graph this hub knows'}
+                {o.graph && !o.available && !o.instead && ', which the store does not have'}
+                {o.instead && s.primary.includes(o.instead) && `, another version of ${o.instead}, which this view reads`}
+                {o.graph && o.available && !(o.instead && s.primary.includes(o.instead)) && (
+                  <> <button type="button" onClick={() => set({ context: withContext(p.graphs, s.context, o.graph!.split('@')[0], o.graph) })}>
+                    {o.instead ? `read it instead of ${o.instead}` : 'add it as context'}</button></>
+                )}
+              </p>
             ))}
           </fieldset>
           <label>Hops <select value={s.hops} onChange={(e) => set({ hops: Number(e.target.value) })} aria-label="hops">
             {[0, 1, 2, 3].map((h) => <option key={h} value={h}>{h}</option>)}</select></label>{' '}
           <label>Direction <select value={s.direction} onChange={(e) => set({ direction: e.target.value as Selection['direction'] })} aria-label="direction">
             <option value="both">both</option><option value="forward">outgoing</option><option value="reverse">incoming</option></select></label>
+          {byLevel && <p className="hint" aria-label="hops note">Starting from levels: every concept of the ticked levels in your graphs is a starting concept already, so hops and direction only reach concepts of context graphs.</p>}
           <label>Layout <select value={s.layout.direction} aria-label="orientation"
                   onChange={(e) => set({ layout: { ...s.layout, direction: e.target.value as Selection['layout']['direction'] } })}>
             <option value="RIGHT">left to right</option><option value="LEFT">right to left</option>

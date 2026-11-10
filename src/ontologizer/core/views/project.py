@@ -18,7 +18,7 @@ from ontologizer.core.views.reader import choose_label
 from ontologizer.core.views.scope import Scope
 from ontologizer.core.views.spec import ViewSpec
 
-COMPILER_VERSION = "1"
+COMPILER_VERSION = "2"
 KIND_ORDER = {"kit-relation": 0, "kit-mapping": 1, "class-inheritance": 2, "rdf-assertion": 3}
 UPPER_PREFIX = "upper/"
 
@@ -50,6 +50,7 @@ class Node:
     owl_structure: bool = False
     internal_relationships: int = 0
     attached_to: str | None = None # annotation target: node or edge id
+    graph: str | None = None       # path of the graph that holds the concept (a primary one first)
 
 
 @dataclass(frozen=True)
@@ -93,18 +94,57 @@ def placement_id(iri: str) -> str:
     return "entity:" + hashlib.sha256(iri.encode()).hexdigest()[:16]
 
 
+def _upper_test(scope: Scope, model: SourceModel):
+    ents = model.entities
+    upper = {g.iri for g in (*scope.primary, *scope.context) if g.base.startswith(UPPER_PREFIX)}
+    return lambda iri: iri.startswith(GUFO) or (iri in ents and bool(ents[iri].graphs) and set(ents[iri].graphs) <= upper)
+
+
+@dataclass(frozen=True)
+class KindFacts:
+    kind: str
+    in_scope: int                  # relationships of this kind from a primary concept to a concept in scope
+    outside: Mapping[str, int]     # target IRI -> relationships from a primary concept to a target not in scope
+
+
+def scope_facts(scope: Scope, model: SourceModel) -> tuple[KindFacts, ...]:
+    """What each relationship kind could show in this scope, whatever the view selects: the sidebar says
+    so next to its toggles. An inheritance into the upper ontology is a category marker, not counted."""
+    ents = model.entities
+    primary = {g.iri for g in scope.primary}
+    is_upper = _upper_test(scope, model)
+    inside = {k: 0 for k in KIND_ORDER}
+    outside: dict[str, dict[str, int]] = {k: {} for k in KIND_ORDER}
+    for r in model.relationships:
+        if r.target is None or r.source not in ents or not (set(ents[r.source].graphs) & primary):
+            continue
+        if r.kind == "class-inheritance" and is_upper(r.target):
+            continue
+        if r.target in ents:
+            inside[r.kind] += 1
+        else:
+            outside[r.kind][r.target] = outside[r.kind].get(r.target, 0) + 1
+    return tuple(KindFacts(kind=k, in_scope=inside[k], outside=dict(sorted(outside[k].items()))) for k in KIND_ORDER)
+
+
 def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramModel:
     ents = model.entities
     primary = {g.iri for g in scope.primary}
-    upper = {g.iri for g in (*scope.primary, *scope.context) if g.base.startswith(UPPER_PREFIX)}
+    path_of = {g.iri: g.path for g in (*scope.primary, *scope.context)}
     excluded = set(spec.excluded)
     levels = set(spec.levels)
+    is_upper = _upper_test(scope, model)
 
     def is_context(iri: str) -> bool:
         return not (set(ents[iri].graphs) & primary)
 
-    def is_upper(iri: str) -> bool:
-        return iri.startswith(GUFO) or (iri in ents and bool(ents[iri].graphs) and set(ents[iri].graphs) <= upper)
+    def graph_of(iri: str) -> str | None:
+        gs = sorted(ents[iri].graphs, key=lambda g: (g not in primary, g))
+        return path_of.get(gs[0]) if gs else None
+
+    def shared_level(members) -> str | None:
+        lv = {ents[m].level for m in members}
+        return lv.pop() if len(lv) == 1 else None
 
     # 1. relationships the view may draw, and upper superclasses as markers
     allowed: list[Relationship] = []
@@ -232,11 +272,12 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
             statuses = tuple(sorted({ents[m].status for m in members if ents[m].status}))
             internal = sum(1 for r in plain if r.source in members and r.target in members)
             nodes.append(Node(id=nid, kind="aggregate", origin="aggregate", label=g.title, members=members,
-                              statuses=statuses, mandatory=True, internal_relationships=internal))
+                              level=shared_level(members), statuses=statuses, mandatory=True,
+                              internal_relationships=internal))
             placement.update({m: nid for m in members})
         else:
             nodes.append(Node(id=f"area:{g.id}", kind="area", origin="aggregate", label=g.title, members=members,
-                              mandatory=True))
+                              level=shared_level(members), mandatory=True))
     area_of = {m: f"area:{g.id}" for g in spec.groups if not g.collapsed for m in g.members}
     for iri in sorted(shown):
         if iri in placement:
@@ -249,7 +290,7 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
                           statuses=(e.status,) if e.status else (),
                           categories=tuple(sorted(markers.get(iri, set()) | ({e.upper_category} if e.upper_category else set()))),
                           hop=hop.get(iri), mandatory=iri in mandatory, context=is_context(iri),
-                          owl_structure=e.owl_structure))
+                          owl_structure=e.owl_structure, graph=graph_of(iri)))
 
     # 7. edges: redirect into aggregates, drop internal ones, bundle equivalent ones
     bundles: dict[tuple, list[Relationship]] = {}

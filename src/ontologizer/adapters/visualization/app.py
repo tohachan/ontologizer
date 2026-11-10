@@ -23,7 +23,8 @@ from rdflib import URIRef
 
 from ontologizer.adapters.visualization.serialize import term, to_json
 from ontologizer.core.levels import Preset
-from ontologizer.core.views.project import COMPILER_VERSION, DiagramModel, DisplayLimitExceeded, compile_view
+from ontologizer.core.views.project import (COMPILER_VERSION, DiagramModel, DisplayLimitExceeded, compile_view,
+                                             scope_facts)
 from ontologizer.core.views.reader import choose_label, read_model
 from ontologizer.core.views.scope import OutOfScope, Owners, Scope, UnknownOwner, catalog, resolve
 from ontologizer.core.views.source import ScopedReader, ScopeTooLarge, Snapshot
@@ -285,6 +286,26 @@ class Visualizer:
         except OutOfScope as e:
             raise ApiError(422, "out-of-scope", str(e)) from None
 
+    def _facts(self, cfg, scope: Scope, model) -> dict:
+        """Per relationship kind: how many the scope holds from its primary concepts, and how many point to a
+        concept outside it, by the graph whose namespace the target is in (None when no known graph's is)."""
+        known = {g.path for g in catalog(cfg, self._graphs())}
+        ns = sorted(((cfg.term_ns(p), p) for p in known), key=lambda x: -len(x[0]))
+        read = {g.path for g in (*scope.primary, *scope.context)}
+        kinds, outside = [], {}
+        for f in scope_facts(scope, model):
+            kinds.append({"kind": f.kind, "inScope": f.in_scope, "outside": sum(f.outside.values())})
+            for target, n in f.outside.items():
+                graph = next((p for prefix, p in ns if target.startswith(prefix)), None)
+                key = (graph, f.kind)
+                outside[key] = outside.get(key, 0) + n
+        version = {p.partition("@")[0]: p for p in read}
+        # `instead`: the version of that graph the scope reads now, which adding this one would replace
+        return {"kinds": kinds,
+                "outside": [{"graph": g, "kind": k, "relationships": n, "available": g in known and g not in read,
+                             "instead": version.get(g.partition("@")[0]) if g else None}
+                            for (g, k), n in sorted(outside.items(), key=lambda x: (-x[1], x[0][0] or "", x[0][1]))]}
+
     def search(self, body: dict) -> dict:
         cfg = self._config(body.get("owner"))
         q = body.get("query")
@@ -360,6 +381,7 @@ class Visualizer:
                         "counts": to_json(diagram.counts)},
             "diagnostics": to_json(checked.diagnostics),
             "sourceDiagnostics": len(model.diagnostics),
+            "scopeFacts": self._facts(cfg, scope, model),
             "changes": changes,
         }
 

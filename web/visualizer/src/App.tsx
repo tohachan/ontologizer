@@ -284,7 +284,9 @@ export function App() {
       <main>
         <Sidebar owners={catalog?.owners ?? []} owner={owner} onOwner={chooseOwner} graphs={ownerCat?.graphs ?? []}
                  levels={ownerCat?.levels ?? []} sel={sel} onChange={setSel} onSearch={search} hits={hits}
-                 searching={searching} onCompile={compile} busy={busy} onUnhide={unhide}>
+                 searching={searching} onCompile={compile} busy={busy} onUnhide={unhide}
+                 facts={compilation && scopeKey(compilation.manifest.requested) === scopeKey(buildSpec(sel).scope) ? compilation.scopeFacts : null}
+                 hiddenByRule={compilation?.diagram.counts.hiddenByRule}>
           {owner && catalog?.planner.enabled && sel.primary.length > 0 &&
             <Ask onAsk={(q) => void ask(q)} busy={busy} candidates={candidates}
                  onPick={(iri) => { setCandidates([]); void apply({ ...sel, seeds: [...sel.seeds.filter((x) => x.iri !== iri), { iri, label: iri.split(/[#/:]/).pop() ?? iri }] }, extra); }} />}

@@ -31,6 +31,7 @@ export type DNode = {
   label: string; members: string[]; parent: string | null; level: string | null; status: string | null;
   statuses: string[]; categories: string[]; hop: number | null; mandatory: boolean; context: boolean;
   owlStructure: boolean; internalRelationships: number; attachedTo: string | null;
+  graph?: string | null;                                   // the graph that holds a concept
 };
 export type DEdge = {
   id: string; source: string; target: string; kind: RelationKind | 'summary'; type: string;
@@ -49,6 +50,13 @@ export type Compilation = {
   diagram: { nodes: DNode[]; edges: DEdge[]; counts: Counts };
   diagnostics: Issue[];
   changes?: Changes | null;
+  scopeFacts?: ScopeFacts;
+};
+// What each relationship kind could show in the compiled scope, whatever the view selects, and where the
+// targets outside it are (`graph` null: no graph this hub knows; `instead`: the version the scope reads now).
+export type ScopeFacts = {
+  kinds: { kind: RelationKind; inScope: number; outside: number }[];
+  outside: { graph: string | null; kind: RelationKind; relationships: number; available: boolean; instead: string | null }[];
 };
 export type Changes = {
   addedEntities: string[]; removedEntities: string[]; notShownEntities: string[]; changedLabels: string[];

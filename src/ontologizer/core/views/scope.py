@@ -1,9 +1,10 @@
 """Which graphs a view may read: the owners, their catalog, and an explicit scope.
 
 A view belongs to one owner. Its primary graphs are that owner's own; its context graphs are any
-graph the configuration knows, but only when listed. Working graphs and releases never share a
-scope: release terms have their own IRIs, so mixing them would show two versions as one.
-The kit's own graphs (no owner, no version) serve as context for either.
+graph the configuration knows, but only when listed. A scope reads one version of each graph: a
+graph and its release, or two of its releases, never meet, because the same concept would show twice
+under two IRIs. Different graphs may be at different versions: a working project graph maps to the
+release of a shared graph it was mapped against, and that release is how its mappings resolve.
 """
 
 from __future__ import annotations
@@ -46,7 +47,8 @@ class Scope:
 
     @property
     def release(self) -> bool:
-        return self.primary[0].release is not None
+        """Every primary graph is a release."""
+        return all(g.release is not None for g in self.primary)
 
     @property
     def iris(self) -> tuple[str, ...]:
@@ -128,15 +130,12 @@ def resolve(cfg: Config, graphs: Sequence[GraphEntry], primary: Sequence[str], c
     both = {g.path for g in prim} & {g.path for g in ctx}
     if both:
         raise OutOfScope(f"graphs both primary and context: {sorted(both)}")
-    releases = {g.release is not None for g in prim}
-    if len(releases) > 1:
-        raise OutOfScope("primary graphs mix working graphs and releases; choose one")
-    is_release = releases.pop()
-    for g in ctx:
-        if g.owner is not None and (g.release is not None) != is_release:
-            raise OutOfScope(f"context graph {g.path!r} is a {'release' if g.release else 'working graph'}, "
-                             f"the primary graphs are {'releases' if is_release else 'working graphs'}; "
-                             "a scope never mixes working graphs and releases")
+    version: dict[str, str] = {}
+    for g in sorted((*prim, *ctx), key=lambda g: g.path):
+        if g.base in version and version[g.base] != g.path:
+            raise OutOfScope(f"{version[g.base]!r} and {g.path!r} are two versions of one graph; "
+                             "a scope reads one version of each graph")
+        version[g.base] = g.path
     return Scope(owner=cfg.project or "", primary=tuple(sorted(prim, key=lambda g: g.path)),
                  context=tuple(sorted(ctx, key=lambda g: g.path)))
 

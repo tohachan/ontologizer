@@ -144,7 +144,7 @@ Every request names its owner explicitly (see *Application API*). Primary graphs
 
 Resolve graph patterns through `Config` at compile time and return the expanded IRI list. Saved view definitions use explicit graph paths in version 1; graph patterns may be offered by the picker but are expanded before saving. No default union over every graph is permitted.
 
-Release selection is encoded by explicit versioned graph paths in `primaryGraphs` and `contextGraphs`; there is no implicit latest-version resolver in schema version 1. Working graphs and releases are distinct scopes. Release terms have distinct IRIs in Ontologizer and may link to working terms with `dcterms:isVersionOf`. Never merge versions by local name. A release view must select compatible context graphs explicitly; the source manifest records the exact selection.
+Release selection is encoded by explicit versioned graph paths in `primaryGraphs` and `contextGraphs`; there is no implicit latest-version resolver in schema version 1. A scope reads one version of each graph: a graph together with one of its releases, or two releases of one graph, is refused, since the same concept would appear twice under two IRIs. Different graphs may be at different versions. A working project graph is often mapped against a release of a shared graph, its mapping targets are that release's terms, and listing the release as context is how those mappings resolve. Release terms have distinct IRIs in Ontologizer and may link to working terms with `dcterms:isVersionOf`. Never merge versions by local name. The source manifest records the exact selection.
 
 Obtain all triples for the chosen scope in one bounded SELECT of `?g ?s ?p ?o`, using `VALUES ?g` and `GRAPH ?g`. Preserve graph identity in the result. Parse a single reconstructed N-Quads document into an RDF dataset so blank-node identity within that response is retained across graphs.
 
@@ -284,7 +284,7 @@ A grouped entity and its ontology entity have different IDs. Use a persisted gro
 
 Store layout separately as `LayoutState`: positions by visual ID, pinned node IDs, viewport, and layout engine/options version. Collapse state lives only in the ViewSpec, because it changes what the compiler produces; collapsing or expanding is a spec change compiled on the same snapshot. Member positions stay in `LayoutState` while their area is collapsed, which is what lets an expand restore them. Presentation changes do not create ontology changes. Selection and hover are transient session state.
 
-A compilation response includes `compileId`, `snapshotId`, source graph manifest, spec digest, compiler version, DiagramModel, and diagnostics. The source graph manifest includes requested graph paths, resolved IRIs, fingerprints, and missing graphs. Recompiling the same semantic inputs must produce stable element IDs and ordering; compile IDs and timing metadata may differ.
+A compilation response includes `compileId`, `snapshotId`, source graph manifest, spec digest, compiler version, DiagramModel, diagnostics, and `scopeFacts`. `scopeFacts` is independent of the view's selection. Per relationship kind, it counts the relationships from a primary concept to a concept in scope (an inheritance into the upper ontology is a marker and is not counted) and those whose target is outside the scope. It also lists the outside targets by the graph whose term namespace they are in, with whether the store has that graph and which version of it the scope reads instead. Each concept card names the graph that holds it, a primary one first. An area or aggregate carries its members' level when they share one. The source graph manifest includes requested graph paths, resolved IRIs, fingerprints, and missing graphs. Recompiling the same semantic inputs must produce stable element IDs and ordering; compile IDs and timing metadata may differ.
 
 ## Semantic reading rules
 
@@ -346,6 +346,13 @@ Use `@xyflow/react` for the canvas, interaction, node components, edge component
 Provide concept cards, expanded area nodes, collapsed aggregate cards, and annotation nodes. Concept cards show a label, level/type marker, and a source status indication where applicable. Keep detailed properties and evidence in an inspector instead of overloading the card.
 
 The initial UI consists of a scope and concept picker, diagram canvas, inspector, and saved-view controls. Include search, level and relation filters, collapse/expand, fit view, automatic layout, orientation, and save. The inspector must answer “why is this element here?” as well as show its original data.
+
+The scope picker offers no combination the server refuses. The owner's graphs are shown at one version, chosen once (working graphs or a release). Every other graph is one row: a checkbox when it has one version, otherwise a choice among its versions or "not read". A setting with nothing to show says so instead of looking broken:
+
+- Next to each relationship kind the picker shows how many the scope holds from its primary concepts and how many point outside it. This comes from the last diagram's `scopeFacts`, and only while the scope is unchanged.
+- Each graph that holds outside targets is named, with a button that adds it as context, or reads it instead of the version the scope reads now.
+- When ticked levels filter out linked concepts, the picker gives their number.
+- In a view started from levels, hops and direction only reach context concepts, and the picker says so.
 
 Run ELK in a worker when supported. Feed measured node dimensions, port definitions, and area containment into a dedicated adapter. Convert ELK coordinates to React Flow parent-relative coordinates and account for area padding. Preserve stable visual IDs through layout.
 
@@ -447,7 +454,7 @@ Required acceptance cases:
 | A kit relation is represented by a reified record | One domain edge with record IRI, status, and evidence |
 | A mapping has only a candidate label | No fabricated target entity |
 | Different scopes contain conflicting records | No cross-scope join or leakage |
-| Working and release graphs coexist | Only the explicitly selected version is read |
+| Working and release graphs coexist | Only the explicitly selected version is read; one version of each graph per scope |
 | A two-edge path is summarized | Summary origin and original ordered path remain inspectable |
 | An area is collapsed and expanded | External edges stay connected and member positions can be restored |
 | A source hypothesis is grouped with asserted data | Mixed source statuses remain visible; no automatic promotion |
@@ -481,7 +488,7 @@ Paths are under `tests/views/` unless named otherwise; browser tests are in `web
 | A reified kit relation | `test_reader.py::test_reified_relation_is_one_relationship_with_record_status_and_evidence` |
 | A mapping with only a candidate label | `test_reader.py::test_mapping_with_a_target_and_a_candidate_without_one` |
 | Conflicting records in different scopes | `test_reader.py::test_a_record_is_not_assembled_from_fragments_in_two_graphs`, `test_scope.py::test_primary_of_another_owner_is_refused` |
-| Working and release graphs coexist | `test_scope.py::test_working_and_release_never_mix`, `test_glob_without_a_version_does_not_reach_releases` |
+| Working and release graphs coexist | `test_scope.py::test_one_version_of_each_graph`, `test_different_graphs_may_be_at_different_versions`, `test_glob_without_a_version_does_not_reach_releases` |
 | A two-edge path is summarized | `test_project.py::test_a_summary_replaces_its_path_and_keeps_it_inspectable`; browser `ops-app.test.tsx` (summary with a reverse step) |
 | An area is collapsed and expanded | `test_project.py::test_collapsed_group_redirects_external_edges_and_counts_internal_ones`; browser `canvas.test.tsx` (positions restored) |
 | A hypothesis grouped with asserted data | `test_project.py::test_mixed_statuses_survive_aggregation`; browser `ops-app.test.tsx` |
