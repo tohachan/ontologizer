@@ -146,7 +146,8 @@ export function Sidebar(p: Props) {
             {p.facts?.outside.map((o) => (
               <p key={`${o.graph}|${o.kind}`} className="hint" aria-label="links outside the scope">
                 {o.relationships} {KINDS.find(([k]) => k === o.kind)?.[1]} point to {o.graph ?? 'concepts in no graph this hub knows'}
-                {o.graph && !o.available && !o.instead && ', which the store does not have'}
+                {o.graph && !o.available && !p.graphs.some((g) => g.path === o.graph) &&
+                  `, which the store does not have${o.instead ? ` (this view reads ${o.instead})` : ''}`}
                 {o.instead && s.primary.includes(o.instead) && `, another version of ${o.instead}, which this view reads`}
                 {o.graph && o.available && !(o.instead && s.primary.includes(o.instead)) && (
                   <> <button type="button" onClick={() => set({ context: withContext(p.graphs, s.context, o.graph!.split('@')[0], o.graph) })}>

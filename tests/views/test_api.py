@@ -453,3 +453,18 @@ def test_overview_reads_the_release_its_mappings_point_to_and_compiles(tmp_path)
     assert status == 200 and c["scopeFacts"]["outside"][0]["instead"] == "shared/domain"
     assert call(app, "POST", "overview", {"owner": "study", "version": "9.9"})[0] == 422
     assert call(app, "POST", "overview", {"owner": "study", "languages": "en"})[0] == 400
+
+
+def test_a_mapping_into_a_release_the_store_lacks_still_names_it(tmp_path):
+    trig = MAPPED.replace("ok:mappingTarget <urn:ontologizer:shared/domain@0.1:Order>",
+                          "ok:mappingTarget <urn:ontologizer:shared/domain@0.3:Order>")
+    assert "@0.3:Order" in trig
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    app = Visualizer(Owners(hub), ScopedReader(RowEngine(trig), Limits()), Settings(allowed_hosts=(HOST,)))
+    s = spec(entities=[], levels=["application", "domain"], relationKinds=["kit-mapping"])
+    s["scope"] = {"primaryGraphs": ["projects/demo"], "contextGraphs": ["shared/domain"]}
+    status, body = call(app, "POST", "compile", {"owner": "study", "spec": s})
+    assert status == 200, body
+    assert body["scopeFacts"]["outside"] == [{"graph": "shared/domain@0.3", "kind": "kit-mapping", "relationships": 1,
+                                              "available": False, "instead": "shared/domain"}]

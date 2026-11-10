@@ -291,9 +291,21 @@ class Visualizer:
             raise ApiError(422, "out-of-scope", str(e)) from None
 
     def _term_graph(self, cfg):
-        """The catalog graph whose term namespace an IRI is in (the longest match), or None."""
+        """The graph whose term namespace an IRI is in: a catalog graph (the longest match), else a graph the
+        configuration has a policy for though the store lacks it (a release not made yet), else None."""
         ns = sorted(((cfg.term_ns(g.path), g.path) for g in catalog(cfg, self._graphs())), key=lambda x: -len(x[0]))
-        return lambda iri: next((p for prefix, p in ns if iri.startswith(prefix)), None)
+
+        def graph_of(iri: str) -> str | None:
+            hit = next((p for prefix, p in ns if iri.startswith(prefix)), None)
+            if hit is not None or not iri.startswith(cfg.namespace):
+                return hit
+            path = iri[len(cfg.namespace):].rpartition(":")[0]
+            try:
+                cfg.policy(path.partition("@")[0])
+            except KeyError:
+                return None
+            return path or None
+        return graph_of
 
     def overview(self, body: dict) -> dict:
         """An overview ViewSpec of an owner's graphs at one version (core/views/builders.py): the client

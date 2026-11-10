@@ -205,9 +205,12 @@ export function App() {
       if (mine !== request.current) return;
       const { s, x } = fromSpec(r.spec, { ...START, languages: sel.languages });
       snapshot.current = { key: scopeKey(r.spec.scope), id: r.snapshotId };
-      setSel(s); setExtra(x); setPicked([]); setFocus(null);
-      setOpened({ id: 'untitled', title: r.spec.title, revision: null }); setInitialLayout(null); setCanvasKey((k) => k + 1);
+      // the current view, its layout and its saved identity stay until the overview has compiled
       const c = await compileWith(s, x, { id: 'untitled', title: r.spec.title });
+      if (c) {
+        setSel(s); setExtra(x); setPicked([]); setFocus(null);
+        setOpened({ id: 'untitled', title: r.spec.title, revision: null }); setInitialLayout(null); setCanvasKey((k) => k + 1);
+      }
       const shut = x.groups.filter((g) => g.collapsed).length;
       const targets = Object.keys(r.mappingTargets);
       const read = targets.filter((g) => r.spec.scope.contextGraphs.includes(g));

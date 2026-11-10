@@ -37,13 +37,15 @@ export function toElk(nodes: DNode[], edges: DEdge[], sizes: Map<string, Size>,
       ],
     };
   };
+  // a compound laid out on its own (in a lane) takes the view's direction and layering itself
+  const own: Record<string, string> = opts.only ? { 'elk.algorithm': 'layered', 'elk.direction': direction, 'elk.layered.layering.strategy': 'MIN_WIDTH' } : {};
   const kept = (n: DNode) => !opts.only || opts.only.has(n.parent ?? n.id);
   const drawn = nodes.filter((n) => n.kind !== 'annotation' && kept(n));
   const byParent = new Map<string | null, DNode[]>();
   for (const n of drawn) byParent.set(n.parent, [...(byParent.get(n.parent) ?? []), n]);
   const item = (n: DNode): ElkNode =>
     n.kind === 'area'
-      ? { id: n.id, layoutOptions: { 'elk.padding': AREA_PADDING }, children: (byParent.get(n.id) ?? []).map(card) }
+      ? { id: n.id, layoutOptions: { 'elk.padding': AREA_PADDING, ...own }, children: (byParent.get(n.id) ?? []).map(card) }
       : card(n);
   const top: ElkNode[] = [];
   const boxed = new Map<string, ElkNode>();
@@ -52,7 +54,7 @@ export function toElk(nodes: DNode[], edges: DEdge[], sizes: Map<string, Size>,
     if (key === undefined) { top.push(item(n)); continue; }
     let box = boxed.get(key);
     if (!box) {
-      box = { id: boxId(key), layoutOptions: { 'elk.padding': BOX_PAD }, children: [] };
+      box = { id: boxId(key), layoutOptions: { 'elk.padding': BOX_PAD, ...own }, children: [] };
       boxed.set(key, box);
       top.push(box);
     }

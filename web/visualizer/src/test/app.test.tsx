@@ -161,3 +161,14 @@ it('the overview takes the service\'s spec and compiles it on the snapshot it re
   expect(sent.spec.title).toBe('Overview of study');
   expect((screen.getByLabelText('domain') as HTMLInputElement).checked).toBe(true);
 });
+
+it('an overview that does not compile leaves the current view as it was', async () => {
+  await toDiagram();
+  routes['POST /overview'] = () => ({ body: { spec: JSON.parse(JSON.stringify((calls.find((c) => c.path === '/compile')!.body as { spec: unknown }).spec)),
+                                               snapshotId: 'snap-1', mappingTargets: {} } });
+  routes['POST /compile'] = () => ({ status: 422, body: { error: { code: 'display-limit', message: 'too many', details: { count: 300, limit: 200 } } } });
+  fireEvent.click(screen.getByText('Overview of all levels'));
+  await screen.findByRole('alert');
+  expect(screen.getByLabelText('concept Order')).toBeTruthy();
+  expect((screen.getByLabelText('view title') as HTMLInputElement).value).toBe('');
+});

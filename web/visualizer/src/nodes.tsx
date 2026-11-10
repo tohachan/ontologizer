@@ -14,6 +14,8 @@ function Ports() {
       <Handle id="top-in" type="target" position={Position.Top} className="lane-port" />
       <Handle id="bottom-out" type="source" position={Position.Bottom} className="lane-port" />
       <Handle id="bottom-in" type="target" position={Position.Bottom} className="lane-port" />
+      <Handle id="left-out" type="source" position={Position.Left} className="lane-port" />
+      <Handle id="right-in" type="target" position={Position.Right} className="lane-port" />
     </>
   );
 }

@@ -114,3 +114,12 @@ export function bands(nodes: DNode[], lanes: Lane[], at: (id: string) => Box | u
   }
   return out;
 }
+
+// The card sides an edge between lanes `a` and `b` (lane indexes) uses: the sides facing the other lane.
+// Null for an edge inside one lane, or with an end in no lane.
+export function laneHandles(a: number | undefined, b: number | undefined, direction: Direction):
+    { sourceHandle?: string; targetHandle?: string } | null {
+  if (a === undefined || b === undefined || a === b) return null;
+  if (across(direction)) return a > b ? { sourceHandle: 'top-out', targetHandle: 'bottom-in' } : { sourceHandle: 'bottom-out', targetHandle: 'top-in' };
+  return a > b ? { sourceHandle: 'left-out', targetHandle: 'right-in' } : {};    // the default sides face a later column
+}

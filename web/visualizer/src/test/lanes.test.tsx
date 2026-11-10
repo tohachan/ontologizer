@@ -4,7 +4,7 @@ import ELK from 'elkjs/lib/elk.bundled.js';
 import type { ElkNode } from 'elkjs/lib/elk-api';
 import { describe, expect, it } from 'vitest';
 import { Canvas, LANES_ENGINE } from '../Canvas';
-import { bands, graphBoxes, laneGraphs, lanesOf, stackLanes } from '../lanes';
+import { bands, graphBoxes, laneGraphs, laneHandles, lanesOf, stackLanes } from '../lanes';
 import type { Compilation, DEdge, DNode } from '../types';
 import { compilation } from './fixtures';
 
@@ -71,6 +71,22 @@ describe('level lanes', () => {
       expect(b.x).toBeGreaterThanOrEqual(lane.x);
       expect(b.y + b.height).toBeLessThanOrEqual(lane.y + lane.height);
     }
+  });
+});
+
+describe('lane layout details', () => {
+  it('lays a box out in the chosen direction too', async () => {
+    const ns = [n('a', 'application', 'p/one'), n('b', 'application', 'p/one'), n('c', 'application', 'p/two')];
+    const { lanes, graphs } = laneGraphs(ns, [e('a', 'b')], new Map(), 'LEFT', ORDER);
+    const { boxes } = stackLanes(lanes, [await new ELK().layout(graphs[0])], 'LEFT');
+    expect(boxes.get('a')!.x).toBeGreaterThan(boxes.get('b')!.x);     // the relation runs right to left
+  });
+  it('joins lanes by the sides that face each other', () => {
+    expect(laneHandles(2, 0, 'RIGHT')).toEqual({ sourceHandle: 'top-out', targetHandle: 'bottom-in' });
+    expect(laneHandles(0, 2, 'RIGHT')).toEqual({ sourceHandle: 'bottom-out', targetHandle: 'top-in' });
+    expect(laneHandles(2, 0, 'DOWN')).toEqual({ sourceHandle: 'left-out', targetHandle: 'right-in' });
+    expect(laneHandles(0, 2, 'DOWN')).toEqual({});
+    expect(laneHandles(1, 1, 'DOWN')).toBeNull();
   });
 });
 

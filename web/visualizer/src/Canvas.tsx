@@ -5,7 +5,7 @@ import {
 import type { ElkPoint } from 'elkjs/lib/elk-api';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fromElk, toElk, type Box, type LayoutResult, type Size } from './elkGraph';
-import { bands, laneGraphs, lanesOf, stackLanes } from './lanes';
+import { bands, laneGraphs, laneHandles, lanesOf, stackLanes } from './lanes';
 import { edgeTypes } from './edges';
 import { edgeText } from './format';
 import { CARD, place } from './layout';
@@ -174,12 +174,7 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
       lanesOf(d.nodes, levelOrder).forEach((l, i) => l.members.forEach((id) => laneOf.set(id, i)));
       for (const n of d.nodes) if (n.parent && laneOf.has(n.parent)) laneOf.set(n.id, laneOf.get(n.parent)!);
     }
-    const rows = direction === 'RIGHT' || direction === 'LEFT';
-    const across = (e: { source: string; target: string }) => {
-      const a = laneOf.get(e.source), b = laneOf.get(e.target);
-      if (a === undefined || b === undefined || a === b) return null;
-      return rows ? (a > b ? { sourceHandle: 'top-out', targetHandle: 'bottom-in' } : { sourceHandle: 'bottom-out', targetHandle: 'top-in' }) : {};
-    };
+    const across = (e: { source: string; target: string }) => laneHandles(laneOf.get(e.source), laneOf.get(e.target), direction);
     const out: Edge[] = d.edges.map((e) => ({
       id: e.id, source: e.source, target: e.target, type: 'routed', className: `edge ${e.kind} ${e.origin}`,
       ...(across(e) ?? {}),
