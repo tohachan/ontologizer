@@ -74,7 +74,14 @@ const last = (v: string) => (v === OTHER ? 2 : v === MIXED ? 1 : 0);   // mixed,
 
 type Keying = { value: (n: DNode) => string; rank: (v: string) => number; label: (v: string) => string };
 
-function keying(key: ArrangeKey, nodes: DNode[], order: string[]): Keying {
+// Level lanes from the top down (the owner's choice, 2026-11-10): the upper ontology, the domain, the
+// application, then the task, whatever order the preset lists them in; the preset's other levels (variation…)
+// follow in its order, and cards without a level last.
+export const LANE_LEVELS = ['top', 'domain', 'application', 'task'];
+export const laneLevelOrder = (order: string[]) => [...LANE_LEVELS, ...order.filter((l) => !LANE_LEVELS.includes(l))];
+
+function keying(key: ArrangeKey, nodes: DNode[], preset: string[]): Keying {
+  const order = laneLevelOrder(preset);
   const kids = new Map<string, DNode[]>();
   for (const n of nodes) if (n.parent) kids.set(n.parent, [...(kids.get(n.parent) ?? []), n]);
   // an area takes its members' shared value; an aggregate the compiler's, when it gives one

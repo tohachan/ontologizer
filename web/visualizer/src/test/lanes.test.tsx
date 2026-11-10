@@ -29,10 +29,10 @@ async function laidOut(direction: 'RIGHT' | 'DOWN') {
 }
 
 describe('level lanes', () => {
-  it('orders lanes as the preset does, the concepts without a level last, groups by their shared level', () => {
+  it('orders lanes top down: domain, application, task; the concepts without a level last; groups by their shared level', () => {
     const agg = n('agg', 'task', null, { kind: 'aggregate', origin: 'aggregate' });
     expect(lanesOf([...NODES, agg], ORDER).map((l) => [l.key, l.members])).toEqual([
-      ['domain', ['d1', 'd2']], ['task', ['agg']], ['application', ['a1', 'a2', 'a3']], ['other', ['x']]]);
+      ['domain', ['d1', 'd2']], ['application', ['a1', 'a2', 'a3']], ['task', ['agg']], ['other', ['x']]]);
   });
 
   it('boxes a lane by graph only when it holds more than one graph', () => {
@@ -304,4 +304,10 @@ describe('a spec built for the viewer', () => {
     const own = { s: { layout: { arrangement: ['graph'] } } } as unknown as Parameters<typeof keepArrangement>[0];
     expect(keepArrangement(own, sel).s.layout.arrangement).toEqual(['graph']);
   });
+});
+
+it('stacks level lanes top, domain, application, task, whatever the preset\'s order, then the other levels', () => {
+  const ns = ['task', 'variation', 'application', 'domain', 'top'].map((lv) => n(lv, lv, 'g/one'));
+  expect(arrange(ns, ['level'], ['top', 'domain', 'task', 'application', 'variation'])!.lanes.map((l) => l.key))
+    .toEqual(['top', 'domain', 'application', 'task', 'variation']);
 });
