@@ -338,3 +338,49 @@ is used. `claude setup-token` is never used.
   that Host is accepted on the MCP route in addition to the allowed hosts: inside the container it is 8090,
   whatever port is published. A service bound to one non-loopback address (`--host 192.0.2.1`) is not
   reachable there; bind 127.0.0.1 or 0.0.0.0.
+
+## 7. Changes of 2026-11-10: model choice, findable concepts, no owner binding (ONTO-47, ONTO-48, ONTO-49)
+
+These changes replace the earlier sections where the two disagree. The sections themselves are updated when
+the cards land.
+
+**Sessions are not bound to an owner (ONTO-49).**
+
+- `POST agent/sessions` takes `{"harness"}`. An `owner` it is sent is accepted and ignored.
+- The chat request's `view` carries the page's owner: `{"owner": str | null, "spec", "compileId", "picked"}`.
+  `owner` and `spec` are null when the page shows no diagram.
+- The tools read every owner's graphs:
+  - `get_catalog` answers `{owners: [{name, available, levels, graphs: [{path, level, role, release, own, concepts}]}]}`.
+  - Search and `list_concepts` cover every graph the hub knows, unless `graphs` narrows them.
+- `preview_view` and `apply_view` take `{owner, spec, summary?}`. `owner` is the owner whose own graphs are the
+  spec's primary graphs; without it, the tools take the current view's owner.
+- The `data-view` chunk's data gains `owner`: `{"spec", "summary", "undoOf", "owner"}`. When `owner` differs
+  from the page's, the page switches to that owner, keeping the chat, and then applies the spec.
+- The Agent tab has no owner choice; the Settings tab keeps it.
+
+**Models (ONTO-47).**
+
+- `GET agent/harnesses`: each harness gains
+  `"models": [{"id", "label"}], "defaultModel": str | null, "efforts": [str], "defaultEffort": str | null`.
+  - The list is the config's `visualizer.agent.<harness>.models` when set. Otherwise it is a built-in list:
+    for Claude, `default`, `opus`, `sonnet` and `haiku`, with efforts `low`, `medium`, `high`; for Codex,
+    `default`.
+  - `default` means the harness's own choice: no `--model` or `-m` flag.
+- The chat request gains `"agent": {"model": str | null, "effort": str | null}`. It applies to that turn and
+  the following ones. A changed model keeps the conversation: Claude takes `--model` with `--resume`, and
+  Codex takes `-m` with `exec resume`.
+- After `start`, the stream sends `{"type": "message-metadata", "messageMetadata": {"harness", "model"}}`.
+  `model` is the one the harness reports (Claude's `system/init`), else the one requested, else null. The
+  page shows it under the answer.
+
+**Tools that find concepts in a few calls (ONTO-48).**
+
+- `search_concepts {queries: [str] (1..10), graphs?, levels?, limit?}`. Each query matches its words in any
+  order, without case, in labels and definitions. A label match ranks before a definition match. The answer
+  is `{results: [{query, hits: [...], total}]}`. A single `query` string is still accepted.
+- `list_concepts {graphs?, levels?, categories?, offset?, limit? (≤500)}` answers
+  `{total, concepts: [{iri, label, level, category, graph}]}`.
+- No tool fails because the page has no view, or because its view has no primary graph.
+- Failures say what to do next.
+- The instructions give a budget of about 5–8 calls per request, and prefer `list_concepts` and batched
+  queries.
