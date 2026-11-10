@@ -81,7 +81,7 @@ export function BandNode({ data }: NodeProps & { data: { label: string; kind: 'l
   return (
     <div className={`band ${data.kind}${data.key ? ` by-${data.key}` : ''}`}
          aria-label={`${data.key ?? (data.kind === 'lane' ? 'level' : 'graph')} ${data.label}`}>
-      <div className="band-title">{data.label}</div>
+      <div className="band-title" title={data.label}>{data.label}</div>
     </div>
   );
 }

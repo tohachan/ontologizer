@@ -13,7 +13,7 @@ const SIDES: Record<ViewSpec['presentation']['direction'], [string, string]> = {
   RIGHT: ['WEST', 'EAST'], LEFT: ['EAST', 'WEST'], DOWN: ['NORTH', 'SOUTH'], UP: ['SOUTH', 'NORTH'],
 };
 const AREA_PADDING = '[top=40,left=16,bottom=16,right=16]';
-export const BOX_PADDING = { top: 36, side: 14, bottom: 14 };
+export const BOX_PADDING = { top: 64, side: 14, bottom: 14 };   // room for a label readable at overview zoom
 const BOX_PAD = `[top=${BOX_PADDING.top},left=${BOX_PADDING.side},bottom=${BOX_PADDING.bottom},right=${BOX_PADDING.side}]`;
 export const boxId = (key: string) => `box:${key}`;
 
