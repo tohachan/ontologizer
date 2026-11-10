@@ -8,6 +8,10 @@ One turn is one `claude -p` process (checked against Claude Code 2.1.322):
            --setting-sources "" --disable-slash-commands --no-chrome
            --system-prompt <instructions> [--model M] [--effort E] [--resume <session id>]
 
+`--model` and `--effort` are the turn's choice from the page, else the hub's config, and absent for
+`default`; with `--resume` a new model continues the same conversation. `system/init` names the model
+that answers (the converter's `model`).
+
 `--tools ""` removes every built-in tool (Bash, Read, Edit, WebFetch, Task…), `--strict-mcp-config`
 every MCP server but the view's, `--allowedTools` lets the view tools run without a prompt and
 `dontAsk` refuses anything else. `--setting-sources ""` keeps the user's settings, hooks and plugins
@@ -26,10 +30,14 @@ import re
 import uuid
 from pathlib import Path
 
-from ontologizer.adapters.visualization.harness_base import bare_tool_name, tool_output, which
-from ontologizer.ports.view_agent import MCP_SERVER, VIEW_TOOLS, Launch, LoginScreen, Turn
+from ontologizer.adapters.visualization.harness_base import DEFAULT, bare_tool_name, choices, safe_id, tool_output, which
+from ontologizer.ports.view_agent import MCP_SERVER, VIEW_TOOLS, Choices, Launch, LoginScreen, Turn
 
 _URL = re.compile(r"https://\S+")
+# The built-in choices (docs/visualizer-agent.md §7): Claude's own aliases for the latest of each model.
+MODELS = ({"id": DEFAULT, "label": "Default"}, {"id": "opus", "label": "Opus"}, {"id": "sonnet", "label": "Sonnet"},
+          {"id": "haiku", "label": "Haiku"})
+EFFORTS = ("low", "medium", "high")
 
 
 class ClaudeConverter:
@@ -40,6 +48,7 @@ class ClaudeConverter:
     def __init__(self):
         self.resume_id: str | None = None
         self.done = False
+        self.model: str | None = None               # from system/init: the model that answers this turn
         self._nonce = uuid.uuid4().hex[:8]
         self._message: str | None = None
         self._streamed: set[str] = set()          # messages whose text arrived as stream events
@@ -55,6 +64,8 @@ class ClaudeConverter:
             return []
         if kind == "system" and event.get("subtype") == "init":
             self.resume_id = event.get("session_id") or self.resume_id
+            if isinstance(event.get("model"), str) and event["model"]:
+                self.model = event["model"]
             return []
         if kind == "stream_event":
             return self._stream(event.get("event") or {})
@@ -151,9 +162,16 @@ class ClaudeConverter:
 
 class Claude:
     name = "claude"
+    reports_model = True                             # system/init names the model
 
-    def __init__(self, command: str = "claude", model: str | None = None, effort: str | None = None):
-        self.command, self.model, self.effort = command, model, effort
+    def __init__(self, command: str = "claude", model: str | None = None, effort: str | None = None,
+                 models=None, efforts=None):
+        self.command = command
+        self._choices = choices(MODELS, EFFORTS, models, efforts, model, effort)
+        self.model, self.effort = safe_id(model), safe_id(effort)
+
+    def choices(self) -> Choices:
+        return self._choices
 
     def executable(self, path: str | None = None) -> str | None:
         return which(self.command, path if path is not None else os.environ.get("PATH"))
@@ -194,10 +212,14 @@ class Claude:
                 "--tools", "", "--allowedTools", ",".join(f"mcp__{MCP_SERVER}__{t}" for t in VIEW_TOOLS),
                 "--permission-mode", "dontAsk", "--setting-sources", "", "--disable-slash-commands", "--no-chrome",
                 "--system-prompt", turn.instructions]
-        if self.model:
-            argv += ["--model", self.model]
-        if self.effort:
-            argv += ["--effort", self.effort]
+        # the turn's choice, else the configured one; `default` is Claude's own (no flag). A new model on a
+        # resumed session keeps the conversation (checked on 2.1.322: --model with --resume).
+        model = safe_id(turn.model if turn.model is not None else self.model)
+        effort = safe_id(turn.effort if turn.effort is not None else self.effort)
+        if model and model != DEFAULT:
+            argv += ["--model", model]
+        if effort and effort != DEFAULT:
+            argv += ["--effort", effort]
         if turn.resume:
             argv += ["--resume", turn.resume]
         message = {"type": "user", "message": {"role": "user", "content": turn.prompt}}
@@ -208,4 +230,5 @@ class Claude:
 
 
 def factory(conf: dict, base=None) -> Claude:
-    return Claude(command=str(conf.get("command", "claude")), model=conf.get("model"), effort=conf.get("effort"))
+    return Claude(command=str(conf.get("command", "claude")), model=conf.get("model"), effort=conf.get("effort"),
+                  models=conf.get("models"), efforts=conf.get("efforts"))

@@ -41,7 +41,7 @@ REQUIRED = {"start": set(), "start-step": set(), "finish-step": set(), "finish":
             "reasoning-start": {"id"}, "reasoning-delta": {"id", "delta"}, "reasoning-end": {"id"},
             "tool-input-available": {"toolCallId", "toolName", "input"},
             "tool-output-available": {"toolCallId", "output"}, "tool-output-error": {"toolCallId", "errorText"},
-            "error": {"errorText"}}
+            "error": {"errorText"}, "message-metadata": {"messageMetadata"}}
 
 
 def feed(conv, name):
@@ -446,8 +446,95 @@ def test_bad_requests(tmp_path):
 
 def test_harness_list(tmp_path):
     svc, _ = service(tmp_path)
-    assert svc.harness_list() == {"harnesses": [{"name": "claude", "installed": True, "signedIn": True,
-                                                 "version": "9.9.9"}]}
+    assert svc.harness_list() == {"harnesses": [{
+        "name": "claude", "installed": True, "signedIn": True, "version": "9.9.9",
+        "models": [{"id": "default", "label": "Default"}, {"id": "opus", "label": "Opus"},
+                   {"id": "sonnet", "label": "Sonnet"}, {"id": "haiku", "label": "Haiku"}],
+        "defaultModel": "default", "efforts": ["low", "medium", "high"], "defaultEffort": None}]}
+
+
+# ---- model and effort per turn (§7, ONTO-47) ----------------------------------------------------
+def test_the_choices_come_from_the_config_else_the_built_in_lists():
+    from ontologizer.adapters.visualization import harness_claude, harness_codex
+    c = Codex().choices()
+    assert (list(c.models), c.default_model, c.efforts, c.default_effort) == ([{"id": "default", "label": "Default"}],
+                                                                               "default", (), None)
+    conf = harness_codex.factory({"models": ["gpt-5.1-codex", {"id": "gpt-5.1", "label": "GPT-5.1"}, "-x",
+                                            "a b", {"label": "no id"}, "gpt-5.1"], "model": "o4-mini"}).choices()
+    assert list(conf.models) == [{"id": "gpt-5.1-codex", "label": "gpt-5.1-codex"}, {"id": "gpt-5.1", "label": "GPT-5.1"},
+                                 {"id": "o4-mini", "label": "o4-mini"}]       # unsafe ids dropped, the default added
+    assert conf.default_model == "o4-mini"
+    assert Codex(models=["default", "gpt-5.1"]).choices().models[0] == {"id": "default", "label": "Default"}
+    cl = harness_claude.factory({"model": "sonnet", "effort": "high", "efforts": ["low", "high", "max"]}).choices()
+    assert cl.default_model == "sonnet" and cl.efforts == ("low", "high", "max") and cl.default_effort == "high"
+    assert harness_claude.factory({"model": "--dangerously-skip-permissions"}).choices().default_model == "default"
+
+
+def test_a_turn_takes_the_model_from_the_turn_else_the_config(tmp_path):
+    def flags(h, **kw):
+        (tmp_path / "s").mkdir(exist_ok=True)
+        for f in (tmp_path / "s").iterdir():
+            f.unlink()
+        argv = list(h.launch(Turn(prompt="p", mcp_url="u", secret="s", instructions="i", resume="r",
+                                  workdir=tmp_path, scratch=tmp_path / "s", **kw)).argv)
+        return [(a, argv[i + 1]) for i, a in enumerate(argv) if a in ("--model", "--effort", "-m")]
+    assert flags(Claude(model="sonnet", effort="low")) == [("--model", "sonnet"), ("--effort", "low")]
+    assert flags(Claude(model="sonnet", effort="low"), model="haiku", effort="high") == [("--model", "haiku"), ("--effort", "high")]
+    assert flags(Claude(model="sonnet", effort="low"), model="default", effort="default") == []
+    assert flags(Claude(), model="--evil") == []                                 # never an option on the command line
+    assert flags(Codex(model="o4-mini")) == [("-m", "o4-mini")]
+    assert flags(Codex(model="o4-mini"), model="default") == []
+    assert flags(Codex(), model="gpt-5.1", effort="high") == [("-m", "gpt-5.1")]   # Codex takes no effort here
+
+
+def metadata(chunks):
+    return [(i, c["messageMetadata"]) for i, c in enumerate(chunks) if c["type"] == "message-metadata"]
+
+
+def test_the_model_chosen_on_the_page_applies_to_this_turn_and_the_next(tmp_path):
+    svc, h = service(tmp_path)
+    h.fixtures = [FIX / "claude-turn.jsonl", FIX / "claude-resume.jsonl", FIX / "claude-resume.jsonl"]
+    sid = svc.create_session("study", "claude")["sessionId"]
+    chunks = events(svc.chat(sid, {**chat_body(), "agent": {"model": "haiku", "effort": "low"}}))
+    well_formed(chunks)
+    rec = json.loads((tmp_path / "record.json").read_text())["argv"]
+    assert rec[rec.index("--model") + 1] == "haiku" and rec[rec.index("--effort") + 1] == "low"
+    # Claude names the answering model in system/init: the chunk follows it, before any text
+    assert metadata(chunks) == [(2, {"harness": "claude", "model": "claude-sonnet-4-5-20250929"})]
+    assert [c["type"] for c in chunks[:2]] == ["start", "start-step"]
+    # the next turn, with no `agent`, keeps the choice and resumes the same conversation
+    chunks = events(svc.chat(sid, chat_body("and now?")))
+    rec = json.loads((tmp_path / "record.json").read_text())["argv"]
+    assert rec[rec.index("--resume") + 1] == "session-1" and rec[rec.index("--model") + 1] == "haiku"
+    assert metadata(chunks)[0][1] == {"harness": "claude", "model": "haiku"}      # no init model: the requested one
+    # a changed model on a resumed conversation; null effort: Claude's own
+    events(svc.chat(sid, {**chat_body("again"), "agent": {"model": "opus", "effort": None}}))
+    rec = json.loads((tmp_path / "record.json").read_text())["argv"]
+    assert rec[rec.index("--model") + 1] == "opus" and "--effort" not in rec and "--resume" in rec
+
+
+def test_codex_shows_the_requested_model_right_after_start(tmp_path):
+    svc, h = service(tmp_path, harness=FakeCodex)
+    h._choices = Codex(models=["gpt-5.1"]).choices()
+    h.fixtures = [FIX / "codex-turn.jsonl", FIX / "codex-resume.jsonl"]
+    sid = svc.create_session("study", "codex")["sessionId"]
+    chunks = events(svc.chat(sid, chat_body()))
+    assert metadata(chunks) == [(2, {"harness": "codex", "model": None})]           # default: no model known
+    chunks = events(svc.chat(sid, {**chat_body("again"), "agent": {"model": "gpt-5.1", "effort": None}}))
+    rec = json.loads((tmp_path / "record.json").read_text())["argv"]
+    assert rec[1:4] == ["exec", "resume", "thread-1"] and rec[rec.index("-m") + 1] == "gpt-5.1"
+    assert metadata(chunks) == [(2, {"harness": "codex", "model": "gpt-5.1"})]
+
+
+def test_a_model_or_effort_not_listed_is_refused(tmp_path):
+    svc, _ = service(tmp_path)
+    sid = svc.create_session("study", "claude")["sessionId"]
+    for agent, code in (({"model": "--dangerously-skip-permissions"}, "unknown-model"), ({"model": "gpt-5"}, "unknown-model"),
+                        ({"model": 3}, "unknown-model"), ({"effort": "ultra"}, "unknown-effort"), ("haiku", "bad-request")):
+        with pytest.raises(Exception) as e:
+            svc.chat(sid, {**chat_body(), "agent": agent})
+        assert (e.value.status, e.value.code) == (400, code)
+    assert not svc.sessions[sid].busy.locked() and svc.sessions[sid].choice == {}
 
 
 # ---- HTTP: routes, SSE, the MCP endpoint ------------------------------------------------------

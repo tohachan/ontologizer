@@ -89,3 +89,8 @@ button.primary { background: var(--accent); color: #fff; border: 0; padding: 8px
 .signin { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; } .signin a { word-break: break-all; }
 .user-code { font-size: 15px; font-weight: 600; letter-spacing: 0.06em; }
 .view-entry > button { flex: none; white-space: nowrap; }
+/* the model under each answer (ONTO-47), the model and effort choice, the owner in the header (ONTO-49) */
+.answered-by { margin: 1px 0 0; font-size: 11px; color: var(--muted); }
+.agent-choice { display: flex; flex-direction: column; gap: 4px; }
+.model-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; } .model-row select { max-width: 11em; }
+.owner-name { font-size: 13px; color: var(--muted); }

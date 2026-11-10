@@ -1,4 +1,4 @@
-{"type": "system", "subtype": "init", "session_id": "session-1", "tools": ["mcp__view__apply_view", "mcp__view__get_current_view"], "mcp_servers": [{"name": "view", "status": "connected", "source": "dynamic"}], "permissionMode": "dontAsk"}
+{"type": "system", "subtype": "init", "session_id": "session-1", "tools": ["mcp__view__apply_view", "mcp__view__get_current_view"], "mcp_servers": [{"name": "view", "status": "connected", "source": "dynamic"}], "permissionMode": "dontAsk", "model": "claude-sonnet-4-5-20250929"}
 {"type": "stream_event", "session_id": "session-1", "parent_tool_use_id": null, "event": {"type": "message_start", "message": {"id": "msg-1", "role": "assistant", "content": []}}}
 {"type": "stream_event", "session_id": "session-1", "parent_tool_use_id": null, "event": {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}}}
 {"type": "stream_event", "session_id": "session-1", "parent_tool_use_id": null, "event": {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": ""}}}

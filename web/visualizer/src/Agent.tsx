@@ -1,16 +1,21 @@
-// The Agent tab (docs/visualizer-agent.md §2, §5): the harness, its sign-in, one session per browser tab, the chat.
+// The Agent tab (docs/visualizer-agent.md §2, §5, §7): the harness, its model and effort, its sign-in, one
+// session per browser tab, the chat. The session is not bound to an owner: the agent reads every owner's graphs.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { agentApi, ApiFailure } from './api';
-import { HARNESS_LABEL, type AgentView, type Harness, type HarnessName, type Login, type ViewEvent } from './agentTypes';
+import { HARNESS_LABEL, type AgentChoice, type AgentView, type Harness, type HarnessName, type Login, type ModelChoice,
+         type ViewEvent } from './agentTypes';
 import { Chat, type Chip } from './Chat';
 import { recall, remember } from './remember';
 
 export const HARNESS_KEY = 'visualizer.harness';
+export const modelKey = (h: HarnessName) => `visualizer.agent.${h}.model`;
+export const effortKey = (h: HarnessName) => `visualizer.agent.${h}.effort`;
 const NAMES = ['claude', 'codex'] as const;
+const DEFAULT = 'default';                                // the harness's own choice: no flag
+const OWN_CHOICE: ModelChoice[] = [{ id: DEFAULT, label: 'Default' }];
 export const LOGIN_POLL_MS = 1000;
 
 type Props = {
-  owner: string | null;
   view: () => AgentView;
   onView: (id: string, ev: ViewEvent) => void;
   onUndo: (id: string) => void;
@@ -20,10 +25,25 @@ type Props = {
 
 const say = (e: unknown) => (e instanceof ApiFailure ? `${e.message} (${e.code})` : String(e));
 
+// The model and effort shown for a harness: the one chosen on this page (or remembered), when still listed;
+// else the service's defaults. An effort of `default` (or none) is null: the harness's own.
+function choiceOf(h: Harness | undefined, name: HarnessName, picked: Partial<AgentChoice> | undefined) {
+  const models = h?.models?.length ? h.models : OWN_CHOICE;
+  const ids = models.map((m) => m.id);
+  const efforts = h?.efforts ?? [];
+  const m = picked?.model ?? recall(modelKey(name), ids, '');
+  const model = ids.includes(m) ? m : h?.defaultModel && ids.includes(h.defaultModel) ? h.defaultModel : ids[0];
+  const e = picked?.effort !== undefined ? picked.effort ?? DEFAULT : recall(effortKey(name), [...efforts, DEFAULT], '');
+  const effort = efforts.includes(e) ? e : e === DEFAULT ? null
+    : h?.defaultEffort && efforts.includes(h.defaultEffort) ? h.defaultEffort : null;
+  return { models, efforts, model, effort };
+}
+
 export function Agent(p: Props) {
   const [harnesses, setHarnesses] = useState<Harness[] | null>(null);
   const [off, setOff] = useState<{ disabled: boolean; message: string } | null>(null);
   const [harness, setHarness] = useState<HarnessName>(() => recall(HARNESS_KEY, NAMES, 'claude'));
+  const [picks, setPicks] = useState<Partial<Record<HarnessName, Partial<AgentChoice>>>>({});
   const [session, setSession] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [epoch, setEpoch] = useState(0);                  // a page back from the back-forward cache needs a new session
@@ -34,15 +54,19 @@ export function Agent(p: Props) {
   useEffect(() => { void refresh(); }, [refresh]);
 
   const h = harnesses?.find((x) => x.name === harness);
-  const ready = !!p.owner && !!h?.installed && !!h.signedIn;
+  const ready = !!h?.installed && !!h.signedIn;
+  const { models, efforts, model, effort } = choiceOf(h, harness, picks[harness]);
+  const choice = useRef<AgentChoice>({ model, effort });
+  choice.current = { model, effort: efforts.length ? effort : null };
+  const agentChoice = useCallback(() => choice.current, []);
 
-  // One session per owner and harness; ended when either changes, or the page goes.
+  // One session per harness; ended when it changes, or the page goes. An owner chosen or switched keeps it.
   useEffect(() => {
-    if (!ready || !p.owner) return;
+    if (!ready) return;
     let id: string | null = null;
     let gone = false;
     setSessionError(null);
-    agentApi.createSession(p.owner, harness).then((r) => {
+    agentApi.createSession(harness).then((r) => {
       if (gone) { agentApi.endSession(r.sessionId).catch(() => {}); return; }
       id = r.sessionId; setSession(r.sessionId);
     }, (e) => { if (!gone) setSessionError(say(e)); });
@@ -57,9 +81,14 @@ export function Agent(p: Props) {
       setSession(null);
       if (id) agentApi.endSession(id).catch(() => {});
     };
-  }, [ready, p.owner, harness, epoch]);
+  }, [ready, harness, epoch]);
 
   const choose = (n: HarnessName) => { setHarness(n); remember(HARNESS_KEY, n); };
+  const chooseModel = (m: string) => { setPicks((x) => ({ ...x, [harness]: { ...x[harness], model: m } })); remember(modelKey(harness), m); };
+  const chooseEffort = (e: string) => {
+    setPicks((x) => ({ ...x, [harness]: { ...x[harness], effort: e === DEFAULT ? null : e } }));
+    remember(effortKey(harness), e);
+  };
   const toSettings = <button type="button" onClick={p.onSettings}>Open Settings</button>;
 
   if (off) {
@@ -76,12 +105,28 @@ export function Agent(p: Props) {
   const label = HARNESS_LABEL[harness];
   return (
     <div className="agent">
-      <label className="row small">Agent <select aria-label="harness" value={harness} onChange={(e) => choose(e.target.value as HarnessName)}>
-        {NAMES.map((n) => {
-          const x = harnesses.find((y) => y.name === n);
-          return <option key={n} value={n}>{HARNESS_LABEL[n]}{!x?.installed ? ' (not installed)' : !x.signedIn ? ' (not signed in)' : ''}</option>;
-        })}
-      </select></label>
+      <div className="agent-choice">
+        <label className="row small">Agent <select aria-label="harness" value={harness} onChange={(e) => choose(e.target.value as HarnessName)}>
+          {NAMES.map((n) => {
+            const x = harnesses.find((y) => y.name === n);
+            return <option key={n} value={n}>{HARNESS_LABEL[n]}{!x?.installed ? ' (not installed)' : !x.signedIn ? ' (not signed in)' : ''}</option>;
+          })}
+        </select></label>
+        {h?.installed && (
+          <div className="row small model-row">
+            <label>Model <select aria-label="model" value={model} onChange={(e) => chooseModel(e.target.value)}
+                                 title="for the next message and the following ones; the conversation is kept">
+              {models.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </select></label>
+            {efforts.length > 0 && (
+              <label>Effort <select aria-label="effort" value={effort ?? DEFAULT} onChange={(e) => chooseEffort(e.target.value)}>
+                <option value={DEFAULT}>Default</option>
+                {efforts.map((x) => <option key={x} value={x}>{x}</option>)}
+              </select></label>
+            )}
+          </div>
+        )}
+      </div>
       {!h?.installed ? (
         <div className="agent-off" aria-label="harness missing">
           <p><b>{label} is not installed</b> where the visualizer runs.</p>
@@ -91,12 +136,11 @@ export function Agent(p: Props) {
         </div>
       ) : !h.signedIn ? (
         <SignIn key={harness} name={harness} onDone={() => void refresh()} />
-      ) : !p.owner ? (
-        <p className="muted small">Choose an owner to talk about its graphs.</p>
       ) : sessionError ? (
         <p className="chat-error">Cannot start a session: {sessionError}</p>
       ) : session ? (
-        <Chat key={session} sessionId={session} view={p.view} onView={p.onView} onUndo={p.onUndo} picked={p.picked} onUnpick={p.onUnpick} />
+        <Chat key={session} sessionId={session} view={p.view} agent={agentChoice} onView={p.onView} onUndo={p.onUndo}
+              picked={p.picked} onUnpick={p.onUnpick} />
       ) : <p className="muted small">Starting {label}…</p>}
     </div>
   );
