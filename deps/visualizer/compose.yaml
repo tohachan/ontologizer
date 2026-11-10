@@ -15,12 +15,20 @@ services:
     environment:
       OPEN_ONTOLOGIES_TOKEN: ${OPEN_ONTOLOGIES_TOKEN:-}
       VISUALIZER_ALLOWED_HOSTS: "127.0.0.1:${VIZ_PORT:-8090},localhost:${VIZ_PORT:-8090}"
+      # HOME of the agent's harnesses (docs/visualizer-agent.md §6): their sign-in survives rebuilds here.
+      VISUALIZER_AGENT_HOME: /agent-home
     ports:
       - "127.0.0.1:${VIZ_PORT:-8090}:8090"
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
+    volumes:
+      - visualizer-agent-home:/agent-home
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  visualizer-agent-home:
+    name: visualizer-agent-home

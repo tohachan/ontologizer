@@ -13,6 +13,18 @@ RUN npm ci --no-audit --no-fund
 COPY web/visualizer/ ./
 RUN npm run build
 
+# The agent's harness CLIs (docs/visualizer-agent.md §6): Claude Code and Codex at the versions pinned,
+# with their checksums, in deps/visualizer/agent/package-lock.json. Only their native binaries reach the
+# final image, so it needs no Node.js.
+FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS agent
+WORKDIR /agent
+COPY deps/visualizer/agent/package.json deps/visualizer/agent/package-lock.json deps/visualizer/agent/.npmrc ./
+RUN npm ci --no-audit --no-fund \
+ && mkdir -p /out/claude /out/codex \
+ && cp node_modules/@anthropic-ai/claude-code/bin/claude.exe /out/claude/claude \
+ && cp -r node_modules/@openai/codex-linux-*/vendor/*/. /out/codex/ \
+ && /out/claude/claude --version && /out/codex/bin/codex --version
+
 FROM python:3.14-slim-bookworm@sha256:3fe1a0b6c2d6b2ebb572906cdabeca75aeb558c0c17db5ffefbcf8094871c32b
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -25,6 +37,12 @@ COPY --from=uv /uv /usr/local/bin/uv
 # Dependencies first, so a source change does not reinstall them.
 COPY pyproject.toml uv.lock LICENSE NOTICE ./
 RUN uv sync --frozen --no-dev --no-install-project
+# The harness CLIs. /agent-home is where the named volume is mounted; a new volume takes this directory's
+# mode, and the container's user is chosen at run time (compose.yaml), so it is open to that user.
+COPY --from=agent /out/claude /opt/claude
+COPY --from=agent /out/codex /opt/codex
+RUN ln -s /opt/claude/claude /usr/local/bin/claude && ln -s /opt/codex/bin/codex /usr/local/bin/codex \
+ && mkdir -m 1777 /agent-home
 # The kit is used from this source tree: the config and the engine adapter locate presets/, kit/,
 # vendor/ and schemas/ relative to it. The image is the hub (ONTOLOGIZER_HUB=/app).
 COPY src ./src
@@ -35,7 +53,12 @@ COPY schemas ./schemas
 COPY ontologizer.yaml ./
 COPY --from=web /web/dist ./web/visualizer/dist
 RUN uv sync --frozen --no-dev && rm /usr/local/bin/uv && chmod -R a+rX /app
-ENV ONTOLOGIZER_HUB=/app
+# HOME of the harnesses: the named volume visualizer-agent-home (compose.yaml), where their sign-in lives.
+# The service itself never reads it. codex-path holds the tools Codex expects beside it (rg).
+ENV ONTOLOGIZER_HUB=/app \
+    VISUALIZER_AGENT_HOME=/agent-home \
+    PATH=/opt/codex/codex-path:$PATH \
+    DISABLE_AUTOUPDATER=1
 USER 10001:10001
 EXPOSE 8090
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \

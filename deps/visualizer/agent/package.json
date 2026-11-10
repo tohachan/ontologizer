@@ -1,0 +1,9 @@
+{
+  "name": "ontologizer-visualizer-agent-clis",
+  "private": true,
+  "description": "The harness CLIs of the visualizer's agent (docs/visualizer-agent.md §6), pinned with their checksums in package-lock.json. Used only by deps/visualizer/Dockerfile.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.322",
+    "@openai/codex": "0.166.0"
+  }
+}
