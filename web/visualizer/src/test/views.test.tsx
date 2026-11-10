@@ -141,3 +141,12 @@ it('refresh reads the source again and keeps the view, its edits and its canvas'
   await screen.findByLabelText('concept Order');
   expect(document.querySelector('.react-flow__node[data-id="entity:order"]')).toBe(nodeEl);   // the canvas was not remounted
 });
+
+it('the manual editor sets the orientation that is saved', async () => {
+  await diagram();
+  fireEvent.change(screen.getByLabelText('orientation'), { target: { value: 'UP' } });
+  fireEvent.change(screen.getByLabelText('view title'), { target: { value: 'Upwards' } });
+  fireEvent.click(screen.getByText('Save'));
+  await screen.findByText(/Saved as “Upwards”/);
+  expect((reqs.filter((r) => r.path === '/compile').at(-1)!.body!.spec as { presentation: { direction: string } }).presentation.direction).toBe('UP');
+});

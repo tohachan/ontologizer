@@ -100,6 +100,10 @@ export function Sidebar(p: Props) {
             {[0, 1, 2, 3].map((h) => <option key={h} value={h}>{h}</option>)}</select></label>{' '}
           <label>Direction <select value={s.direction} onChange={(e) => set({ direction: e.target.value as Selection['direction'] })} aria-label="direction">
             <option value="both">both</option><option value="forward">outgoing</option><option value="reverse">incoming</option></select></label>
+          <label>Layout <select value={s.layout.direction} aria-label="orientation"
+                  onChange={(e) => set({ layout: { ...s.layout, direction: e.target.value as Selection['layout']['direction'] } })}>
+            <option value="RIGHT">left to right</option><option value="LEFT">right to left</option>
+            <option value="DOWN">top to bottom</option><option value="UP">bottom to top</option></select></label>
           <label>Labels <select value={s.languages.join(',')} onChange={(e) => set({ languages: e.target.value.split(',') })} aria-label="languages">
             <option value="en,ru">English first</option><option value="ru,en">Russian first</option></select></label>
           <button type="button" className="primary" onClick={p.onCompile}

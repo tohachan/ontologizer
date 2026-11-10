@@ -155,6 +155,15 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
 
   const autoLayout = () => (pinned.current.size ? setConfirm(true) : void runFull());
 
+  // A new orientation is a new layout; with cards pinned by hand it asks first, as Auto layout does.
+  const lastDirection = useRef(direction);
+  useEffect(() => {
+    if (lastDirection.current === direction) return;
+    lastDirection.current = direction;
+    autoLayout();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [direction]);
+
   return (
     <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={onNodesChange}
                onNodeDragStop={onDragStop} fitView minZoom={0.1} nodesConnectable={false}

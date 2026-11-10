@@ -71,3 +71,15 @@ describe('layout on the canvas', () => {
     expect(transformOf('entity:order')).toContain('700px');
   });
 });
+
+describe('orientation', () => {
+  it('a new orientation lays the cards out again in that direction', async () => {
+    const seen: string[] = [];
+    const engine = (g: ElkNode) => { seen.push(g.layoutOptions!['elk.direction']); return Promise.resolve(laidOut(g, 300)); };
+    const { rerender } = render(<ReactFlowProvider><Canvas compilation={compilation('c1')} picked={[]} onPick={() => {}} engine={engine} direction="RIGHT" /></ReactFlowProvider>);
+    await act(async () => {
+      rerender(<ReactFlowProvider><Canvas compilation={compilation('c1')} picked={[]} onPick={() => {}} engine={engine} direction="DOWN" /></ReactFlowProvider>);
+    });
+    expect(seen).toEqual(['DOWN']);
+  });
+});

@@ -269,3 +269,10 @@ def test_areas_and_notes_count_against_the_node_budget():
     d = compile_view(spec(annotations=[{"id": "n", "text": "t", "target": {"kind": "entity", "id": X + "A"}}],
                           presentation={"maxNodes": 3}), scope(), model(CHAIN, CHAIN_RELS))
     assert len(d.nodes) == 3                                        # A, B and the note; nothing over the limit
+
+
+def test_a_note_on_an_expanded_entity_counts_against_the_budget():
+    d = compile_view(spec(annotations=[{"id": "n", "text": "t", "target": {"kind": "entity", "id": X + "B"}}],
+                          presentation={"maxNodes": 2}), scope(), model(CHAIN, CHAIN_RELS))
+    assert len(d.nodes) <= 2 and d.counts.shown_nodes == len(d.nodes)
+    assert d.counts.omitted_nodes == 1                                # B and its note would make three

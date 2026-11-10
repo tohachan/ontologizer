@@ -202,8 +202,8 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
     group_of = {m: g.id for g in spec.groups for m in g.members if m in visible}
     # Every emitted node counts: an area container and an annotation take a place like a card.
     areas = sum(1 for g in spec.groups if not g.collapsed and any(m in mandatory for m in g.members))
-    notes = sum(1 for a in spec.annotations if a.target_kind != "entity" or a.target_id in mandatory)
     def cost(iris_) -> int:
+        notes = sum(1 for a in spec.annotations if a.target_kind != "entity" or a.target_id in iris_)
         return len({group_of[i] if group_of.get(i) in collapsed else i for i in iris_}) + areas + notes
     if cost(mandatory) > spec.max_nodes:
         raise DisplayLimitExceeded(cost(mandatory), spec.max_nodes)
@@ -293,7 +293,7 @@ def compile_view(spec: ViewSpec, scope: Scope, model: SourceModel) -> DiagramMod
     order = {"area": 0, "aggregate": 1, "concept": 2, "annotation": 3}
     nodes.sort(key=lambda n: (order[n.kind], n.id))
     return DiagramModel(nodes=tuple(nodes), edges=tuple(edges), placement=dict(sorted(placement.items())),
-                        counts=Counts(shown_nodes=sum(1 for n in nodes if n.kind != "annotation"),
+                        counts=Counts(shown_nodes=len(nodes),                      # every emitted node, notes too
                                       shown_edges=len(edges), boundary=len(boundary), excluded=len(excluded_seen),
                                       hidden_by_rule=len(filtered | hidden), omitted_nodes=omitted,
                                       omitted_edges=omitted_edges))
