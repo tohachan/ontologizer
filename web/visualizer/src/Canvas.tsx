@@ -8,6 +8,7 @@ import { fromElk, toElk, type Box, type LayoutResult, type Size } from './elkGra
 import { bands, laneGraphs, laneHandles, lanesOf, stackLanes } from './lanes';
 import { edgeTypes } from './edges';
 import { edgeText } from './format';
+import { focusOf, reconcile, sameEdge, sameNode } from './focus';
 import { CARD, place } from './layout';
 import { cardsOf, carryOver } from './placement';
 import { defaultEngine, LayoutRunner } from './layoutRunner';
@@ -29,6 +30,20 @@ export const LANES_ENGINE = `${ENGINE}+lanes`;
 const AREA_PAD = { top: 40, side: 16, bottom: 16 };
 const NO_LEVELS: string[] = [];
 const MAPPING_COLOR = '#c2410c';               // a mapping crosses levels: drawn apart from relations (styles.css)
+const MANY_FRESH = { share: 0.3, least: 8 };   // a recompile bringing this many new cards lays them all out
+const VISIBLE_ONLY = 150;                      // above this many nodes, only what is on screen is rendered
+const WHEEL_KEY = 'visualizer.wheel';
+
+// What a recompile does with its new cards: few go next to a neighbour; many (a group expanded) get a full
+// layout, which asks first when cards are pinned by hand.
+export function afterRecompile(fresh: number, cards: number, pinned: number): 'place' | 'layout' | 'ask' {
+  if (fresh < Math.max(MANY_FRESH.least, MANY_FRESH.share * cards)) return 'place';
+  return pinned ? 'ask' : 'layout';
+}
+
+function storedWheel(): 'pan' | 'zoom' {
+  try { return localStorage.getItem(WHEEL_KEY) === 'zoom' ? 'zoom' : 'pan'; } catch { return 'pan'; }
+}
 
 export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engine = defaultEngine, initialLayout, layoutRef,
                         defaultLanes = false, levelOrder = NO_LEVELS }: Props) {
@@ -46,6 +61,10 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
   const [version, setVersion] = useState(0);
   const [status, setStatus] = useState<'idle' | 'running' | 'failed'>('idle');
   const [confirm, setConfirm] = useState(false);
+  const [wheel, setWheel] = useState(storedWheel);
+  const askLayout = useRef(false);                          // the new diagram brought many cards while some are pinned
+  const fitAt = useRef<number | null>(null);               // fit the view once the nodes of this layout version are drawn
+  const nodesFrom = useRef(0);                             // the layout version the nodes state was last built from
   const d = compilation.diagram;
 
   // A new compilation keeps the cards it shares with the last one where they were and places the
@@ -53,8 +72,16 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
   useMemo(() => {
     routes.current = new Map();
     runner.current.cancel();
+    askLayout.current = false;
     if (positions.current.size === 0) { pendingFull.current = true; fresh.current = new Set(); }
-    else ({ positions: positions.current, fresh: fresh.current } = carryOver(positions.current, cards.current, d.nodes, d.edges));
+    else {
+      ({ positions: positions.current, fresh: fresh.current } = carryOver(positions.current, cards.current, d.nodes, d.edges));
+      // many new cards (a group expanded, say) placed next to a neighbour would pile up: lay them all out,
+      // or ask first when cards are pinned by hand
+      const next = afterRecompile(fresh.current.size, d.nodes.filter((n) => n.kind !== 'annotation').length, pinned.current.size);
+      if (next === 'ask') askLayout.current = true;
+      if (next === 'layout') pendingFull.current = true;
+    }
     cards.current = cardsOf(d.nodes);
   }, [d]);
 
@@ -85,14 +112,13 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
       routes.current = r;
       fresh.current = new Set();
       setStatus('idle');
-      setVersion((v) => v + 1);
-      requestAnimationFrame(() => flow.fitView?.({ padding: 0.1 }));
+      setVersion((v) => { fitAt.current = v + 1; return v + 1; });
     } catch {
       setStatus('failed');                                // the cards stay where they are
     }
   }, [d, direction, flow, lanes, levelOrder]);
 
-  useEffect(() => { setStatus('idle'); setConfirm(false); }, [d]);
+  useEffect(() => { setStatus('idle'); setConfirm(askLayout.current); }, [d]);
 
   useEffect(() => {
     if (!layoutRef) return;
@@ -111,17 +137,15 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);   // a cancelled layout leaves nothing running
 
-  useEffect(() => {
-    if (measured && pendingFull.current) { pendingFull.current = false; void runFull(); }
-  }, [measured, runFull]);
-
   const derived = useMemo((): Node[] => {
     const fallback = place(d.nodes);
     const pos = (n: DNode) => positions.current.get(n.id) ?? fallback.get(n.id)!;
     const kids = new Map<string, DNode[]>();
     for (const n of d.nodes) if (n.parent) kids.set(n.parent, [...(kids.get(n.parent) ?? []), n]);
+    const byId = new Map(d.nodes.map((m) => [m.id, m]));
+    const ports = lanes ? (direction === 'RIGHT' || direction === 'LEFT' ? 'rows' : 'columns') : 'none';
     const abs = (id: string): Pos => {
-      const n = d.nodes.find((m) => m.id === id);
+      const n = byId.get(id);
       if (!n) return { x: 0, y: 0 };
       const p = pos(n);
       if (!n.parent) return p;
@@ -133,14 +157,14 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
         const ks = kids.get(n.id) ?? [];
         const w = Math.max(CARD.width, ...ks.map((k) => pos(k).x + CARD.width)) + AREA_PAD.side;
         const h = Math.max(CARD.height, ...ks.map((k) => pos(k).y + CARD.height)) + AREA_PAD.bottom;
-        return { id: n.id, type: 'area', position: pos(n), data: { node: n }, selected: picked.includes(n.id), style: { width: w, height: h } };
+        return { id: n.id, type: 'area', position: pos(n), data: { node: n, ports }, style: { width: w, height: h } };
       }
       if (n.kind === 'annotation') {
         const t = n.attachedTo ? abs(n.attachedTo) : { x: 0, y: 0 };
-        return { id: n.id, type: 'annotation', position: { x: t.x + CARD.width + 16, y: t.y - 44 }, data: { node: n }, draggable: false, selected: picked.includes(n.id) };
+        return { id: n.id, type: 'annotation', position: { x: t.x + CARD.width + 16, y: t.y - 44 }, data: { node: n }, draggable: false };
       }
       return {
-        id: n.id, type: n.kind, position: pos(n), data: { node: n }, selected: picked.includes(n.id),
+        id: n.id, type: n.kind, position: pos(n), data: { node: n, ports },
         className: fresh.current.has(n.id) ? 'fresh' : pinned.current.has(n.id) ? 'pinned' : undefined,
         ...(n.parent ? { parentId: n.parent, extent: 'parent' as const } : {}),
       };
@@ -161,12 +185,36 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
     }));
     return [...decor, ...out];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, picked, version, lanes, levelOrder]);
+  }, [d, version, lanes, levelOrder, direction]);
 
-  const [nodes, setNodes] = useState<Node[]>(derived);
-  useEffect(() => setNodes(derived), [derived]);
+  // A pick changes only the nodes it selects or lights; the others keep their objects (focus.ts).
+  const focus = useMemo(() => focusOf(picked, d), [picked, d]);
+  const shown = useMemo((): Node[] => derived.map((n) => {
+    const selected = picked.includes(n.id), lit = focus.nodes.has(n.id);
+    if (!selected && !lit) return n;
+    return { ...n, selected, className: lit ? `${n.className ?? ''} lit`.trim() : n.className };
+  }), [derived, picked, focus]);
+
+  const [nodes, setNodes] = useState<Node[]>(shown);
+  useEffect(() => { nodesFrom.current = version; setNodes((cur) => reconcile(cur, shown, sameNode)); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shown]);
   const onNodesChange = useCallback((changes: NodeChange[]) => setNodes((ns) => applyNodeChanges(changes, ns)), []);
 
+  // The first layout of a diagram waits until React Flow has measured every card of it, not just the last
+  // diagram's; and the view is fitted once the laid-out positions are drawn.
+  useEffect(() => {
+    if (pendingFull.current && measured && d.nodes.every((n) => n.kind === 'annotation' || flow.getInternalNode?.(n.id)?.measured?.width)) {
+      pendingFull.current = false;
+      void runFull();
+    }
+    if (fitAt.current !== null && nodesFrom.current >= fitAt.current) {
+      fitAt.current = null;
+      requestAnimationFrame(() => flow.fitView?.({ padding: 0.1 }));
+    }
+  }, [nodes, measured, runFull, d, flow]);
+
+  const edgesBefore = useRef<Edge[]>([]);
   const edges = useMemo((): Edge[] => {
     // with lanes as rows, an edge between two lanes leaves its card at the top or bottom, toward the other lane
     const laneOf = new Map<string, number>();
@@ -175,22 +223,25 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
       for (const n of d.nodes) if (n.parent && laneOf.has(n.parent)) laneOf.set(n.id, laneOf.get(n.parent)!);
     }
     const across = (e: { source: string; target: string }) => laneHandles(laneOf.get(e.source), laneOf.get(e.target), direction);
-    const out: Edge[] = d.edges.map((e) => ({
-      id: e.id, source: e.source, target: e.target, type: 'routed', className: `edge ${e.kind} ${e.origin}`,
-      ...(across(e) ?? {}),
-      selected: picked.includes(e.id),
-      markerEnd: { type: MarkerType.ArrowClosed, ...(e.kind === 'kit-mapping' ? { color: MAPPING_COLOR } : {}) },
-      data: { points: routes.current.get(e.id), text: edgeText(e.kind, e.type, e.label), straight: !!across(e) },
-      style: e.origin === 'summary' ? { strokeDasharray: '6 4' } : e.kind === 'kit-mapping' ? { strokeDasharray: '2 3' } : undefined,
-    }));
+    const out: Edge[] = d.edges.map((e) => {
+      const lit = focus.edges.has(e.id);
+      return {
+        id: e.id, source: e.source, target: e.target, type: 'routed', className: `edge ${e.kind} ${e.origin}${lit ? ' lit' : ''}`,
+        ...(across(e) ?? {}),
+        selected: picked.includes(e.id), ...(lit ? { zIndex: 1 } : {}),
+        markerEnd: { type: MarkerType.ArrowClosed, ...(e.kind === 'kit-mapping' ? { color: MAPPING_COLOR } : {}) },
+        data: { points: routes.current.get(e.id), text: edgeText(e.kind, e.type, e.label), straight: !!across(e), lit },
+        style: e.origin === 'summary' ? { strokeDasharray: '6 4' } : e.kind === 'kit-mapping' ? { strokeDasharray: '2 3' } : undefined,
+      };
+    });
     for (const n of d.nodes) {
       if (n.kind === 'annotation' && n.attachedTo && d.nodes.some((m) => m.id === n.attachedTo)) {
         out.push({ id: `note-link:${n.id}`, source: n.id, target: n.attachedTo, className: 'edge note-link', selectable: false, focusable: false });
       }
     }
-    return out;
+    return (edgesBefore.current = reconcile(edgesBefore.current, out, sameEdge));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [d, picked, version, lanes, levelOrder, direction]);
+  }, [d, picked, focus, version, lanes, levelOrder, direction]);
 
   const onDragStop = useCallback((_: unknown, n: Node) => {
     positions.current.set(n.id, n.position);
@@ -214,6 +265,9 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
   return (
     <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} onNodesChange={onNodesChange}
                onNodeDragStop={onDragStop} fitView minZoom={0.1} nodesConnectable={false}
+               className={focus.nodes.size ? 'focusing' : undefined}
+               onlyRenderVisibleElements={d.nodes.length > VISIBLE_ONLY}
+               panOnScroll={wheel === 'pan'} zoomOnScroll={wheel === 'zoom'} zoomActivationKeyCode={['Meta', 'Control']}
                multiSelectionKeyCode={null} selectionKeyCode={null}
                onNodeClick={(ev, n) => n.type !== 'band' && onPick(n.id, ev.shiftKey || ev.ctrlKey || ev.metaKey)}
                onEdgeClick={(ev, e) => onPick(e.id.startsWith('note-link:') ? null : e.id, ev.shiftKey || ev.ctrlKey || ev.metaKey)}
@@ -225,6 +279,12 @@ export function Canvas({ compilation, picked, onPick, direction = 'RIGHT', engin
           {status === 'running' ? 'Laying out…' : 'Auto layout'}</button>
         <label title="each abstraction level in its own band, top level first"><input type="checkbox" checked={lanes}
           onChange={(e) => setLanes(e.target.checked)} aria-label="lanes by level" /> Lanes by level</label>
+        <label title="the mouse wheel pans the diagram; Ctrl or Cmd with the wheel, a pinch, or the + and − buttons zoom">
+          <input type="checkbox" checked={wheel === 'zoom'} aria-label="wheel zooms" onChange={(e) => {
+            const w = e.target.checked ? 'zoom' : 'pan';
+            setWheel(w);
+            try { localStorage.setItem(WHEEL_KEY, w); } catch { /* the choice lasts this page only */ }
+          }} /> Wheel zooms</label>
         {status === 'failed' && <span role="alert"> Layout failed; the cards stay where they are. <button type="button" onClick={() => void runFull()}>Retry</button></span>}
         {confirm && (
           <div role="dialog" aria-label="pinned cards" className="confirm">

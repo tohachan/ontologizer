@@ -40,12 +40,12 @@ button.primary { background: var(--accent); color: #fff; border: 0; padding: 8px
 .statements td { vertical-align: top; padding: 2px 4px; border-bottom: 1px solid var(--bg); font-size: 12px; }
 .block { border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
 .edge-label { position: absolute; font-size: 11px; background: var(--card); padding: 0 3px; border: 1px solid var(--line); pointer-events: all; }
-.layout-panel { background: var(--card); padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
+.layout-panel { max-width: 380px; background: var(--card); padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
 .confirm { margin-top: 6px; max-width: 260px; display: flex; flex-direction: column; gap: 4px; }
 .react-flow__node.fresh .card { box-shadow: 0 0 0 3px #f0c419; }
 .react-flow__node.fresh .card::after { content: 'new'; font-size: 10px; float: right; }
 .react-flow__node.pinned .card::before { content: '📌 '; font-size: 10px; }
-.actions { position: absolute; z-index: 5; top: 8px; left: 8px; right: 320px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+.actions { position: absolute; z-index: 5; top: 8px; left: 8px; right: 400px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
            background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; font-size: 13px; }
 .ask { display: inline-flex; gap: 4px; }
 .area.selected, .note.selected { outline: 3px solid var(--accent); }
@@ -56,3 +56,10 @@ button.primary { background: var(--accent); color: #fff; border: 0; padding: 8px
 .why { font-size: 12px; color: var(--muted); }
 .sub { font-size: 12px; font-weight: 600; margin: 6px 0 2px; }
 .hint.pending { color: #8a5a00; background: #fff6dc; border: 1px solid #f0c419; padding: 4px 6px; border-radius: 4px; }
+/* a pick lights its card, its edges and their other ends; everything else steps back (focus.ts) */
+.react-flow.focusing .react-flow__node:not(.lit):not(.react-flow__node-band) { opacity: 0.28; }
+.react-flow.focusing .react-flow__edge:not(.lit) { opacity: 0.12; }
+.react-flow.focusing .edge-label:not(.lit) { opacity: 0.15; }
+.react-flow__edge.lit path.react-flow__edge-path { stroke-width: 2.6; }
+.react-flow__edge.lit:not(.kit-mapping) path.react-flow__edge-path { stroke: var(--accent); }
+.edge-label.lit { border-color: var(--accent); font-weight: 600; }

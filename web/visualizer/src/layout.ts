@@ -26,10 +26,11 @@ export function place(nodes: DNode[]): Map<string, Placed> {
     const hop = blockHop(n);
     columns.set(hop, [...(columns.get(hop) ?? []), { id: n.id, h }]);
   }
+  const kind = new Map(nodes.map((n) => [n.id, n.kind]));
   for (const [hop, items] of [...columns.entries()].sort((a, b) => a[0] - b[0])) {
     let y = 0;
     for (const item of items) {
-      const w = nodes.find((n) => n.id === item.id)?.kind === 'area' ? CARD.width + 2 * PAD.side : CARD.width;
+      const w = kind.get(item.id) === 'area' ? CARD.width + 2 * PAD.side : CARD.width;
       out.set(item.id, { x: hop * (CARD.width + 2 * PAD.side + GAP.x), y, width: w, height: item.h });
       y += item.h + GAP.y;
     }

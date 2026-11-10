@@ -379,7 +379,11 @@ Run ELK in a worker when supported. Feed measured node dimensions, port definiti
 
 If rendering ELK's orthogonal routes, implement an edge component that uses its routed sections and bend points. React Flow's default smooth-step edge is not a substitute for those routes. Cross-area edges must remain connected to the correct member ports.
 
-Dragging changes LayoutState only. Refresh does not automatically rerun a full layout. Place newly appearing nodes near related nodes and mark new elements; offer an explicit auto-layout action for the complete view. A deliberate full layout may reposition unpinned nodes. For version 1, a full automatic layout is available only when no nodes are pinned. If pins exist, offer to preserve the current positions or explicitly unlock them before full layout. Local placement of new nodes may leave overlaps to resolve manually. Do not assume arbitrary pin constraints are automatically respected by ELK.
+Dragging changes LayoutState only. Refresh does not automatically rerun a full layout for a few new cards. Place newly appearing nodes near related nodes and mark new elements; offer an explicit auto-layout action for the complete view.
+
+A recompile that brings many new cards (at least 8, and at least 30% of the cards, as when a group is expanded) lays the whole view out instead, because cards placed one by one would pile up. When cards are pinned, it asks first.
+
+The first layout of a diagram waits until React Flow has measured every card of that diagram, not only the cards of the one before. The view is fitted once the laid-out positions are drawn. A deliberate full layout may reposition unpinned nodes. For version 1, a full automatic layout is available only when no nodes are pinned. If pins exist, offer to preserve the current positions or explicitly unlock them before full layout. Local placement of new nodes may leave overlaps to resolve manually. Do not assume arbitrary pin constraints are automatically respected by ELK.
 
 **Lanes by level** (on by default, a switch on the canvas):
 
@@ -388,6 +392,19 @@ Dragging changes LayoutState only. Refresh does not automatically rerun a full l
 - Inside a lane, ELK lays out each compound separately (`SEPARATE_CHILDREN`, minimum-width layering), so unconnected parts sit side by side instead of in one tall column. In a lane holding concepts of more than one graph, each graph's concepts sit in a labelled box.
 - ELK routes only edges inside one compound. An edge between boxes is drawn between its cards. An edge between lanes, such as a mapping, is a straight line from the top or bottom of its card toward the other lane. Mappings have their own colour as well as their dashes.
 - Bands are drawn from where the cards are, so they follow a drag. A saved layout records whether it used lanes (`elkjs-0.12.0/layered+lanes`) and opens the same way.
+
+**Picking and navigating.**
+
+- Picking a card or an area lights it, its edges and the cards at their other ends; the rest of the diagram dims until the pane is clicked.
+- The mouse wheel pans. Ctrl or Cmd with the wheel, a trackpad pinch, or the controls zoom. A canvas switch, remembered in the browser, makes the wheel zoom instead.
+
+**Rendering cost** (`focus.ts`):
+
+- A pick changes only the nodes and edges it selects or lights; the dimming is one class on the canvas.
+- Every rebuilt node or edge that looks the same keeps the object React Flow already has, so React Flow does not redraw it. A drag redraws only what moved.
+- A card carries only the handles its layout uses.
+- Edge labels are hidden below 45% zoom, except on lit edges.
+- Above 150 nodes, only what is on screen is rendered.
 
 Ignore stale worker results when a newer layout request exists. Layout failure leaves the last valid diagram visible and offers retry. Use text and accessible markers in addition to color to distinguish source, aggregate, and summary elements.
 
@@ -550,7 +567,9 @@ On the development VM (4 cores, aarch64), synthetic views (`uv run scripts/views
 | 100 | 258 | 6.5 ms | 0.8 ms | 179 ms |
 | 200 | 400 | 13.0 ms | 1.7 ms | 411 ms |
 
-Both targets hold with a wide margin: projection under one second, layout under two seconds at 200 nodes. The source read dominates: 9,845 quads (the largest working graph with its context) in 0.29 s, all working graphs (87,829 quads) in 3.4 s, measured read-only against the working store; an edit reuses the snapshot and reads nothing. Render time in a browser has not been measured.
+Both targets hold with a wide margin: projection under one second, layout under two seconds at 200 nodes. The source read dominates: 9,845 quads (the largest working graph with its context) in 0.29 s, all working graphs (87,829 quads) in 3.4 s, measured read-only against the working store; an edit reuses the snapshot and reads nothing.
+
+Render, in headless Chromium on the same VM (software rendering), with a 200-card, 298-edge overview of the live store: picking a card takes a median of 82 ms from the click to the next frame before ONTO-42 and 49 ms after it. About 18 ms of that is React work. Pans and drags show no long animation frame. The rest is style, layout and paint, which a GPU-backed browser does faster. The card handles fell from 1,600 to 1,200, and the edge labels drawn at overview zoom from 298 to 3. These were measured with Playwright scripts outside the repository, since Playwright is not a dependency.
 
 Add deterministic projection tests, API schema contract tests, one browser flow covering scope → compile → group → inspect → save → reload with the planner both on and off, and planner tests using a stub provider. Test edge routing across area boundaries at different zoom levels and card sizes.
 

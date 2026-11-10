@@ -97,14 +97,15 @@ export function bands(nodes: DNode[], lanes: Lane[], at: (id: string) => Box | u
     return { x: x - pad.side, y: y - pad.top, width: w + 2 * pad.side, height: h + pad.top + pad.bottom };
   };
   for (const lane of lanes) {
+    const boxed = graphBoxes(nodes, lane);
     const groups = new Map<string, string[]>();
-    for (const [id, key] of graphBoxes(nodes, lane)) groups.set(key, [...(groups.get(key) ?? []), id]);
+    for (const [id, key] of boxed) groups.set(key, [...(groups.get(key) ?? []), id]);
     const inner: Box[] = [];
     for (const [key, ids] of groups) {
       const box = around(ids, { top: BOX_PADDING.top - 8, side: BOX_PADDING.side - 4, bottom: BOX_PADDING.bottom - 4 });
       if (box) { out.push({ id: boxId(key), kind: 'box', label: key.split('|')[1], box }); inner.push(box); }
     }
-    const loose = lane.members.filter((id) => !graphBoxes(nodes, lane).has(id));
+    const loose = lane.members.filter((id) => !boxed.has(id));
     const parts = [...loose.map(at).filter((b): b is Box => !!b), ...inner];
     if (!parts.length) continue;
     const x = Math.min(...parts.map((b) => b.x)), y = Math.min(...parts.map((b) => b.y));
