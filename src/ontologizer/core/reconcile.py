@@ -10,6 +10,9 @@
    disagree on the gUFO category. An LLM resolves each in
    `reconcile/<p>.resolutions.json` with a reason; `--apply` builds
    `application/<p>.json` from the clusters and the resolutions.
+6. Constraints are kept from every extractor, their concept ids remapped to the reconciled concepts; one that
+   two extractors state alike (modality, constrained concepts, cited lines) is kept once, and the share of
+   such pairs is the constraints' agreement (`reconciled.constraints`).
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import json
 from pathlib import Path
 
 from ontologizer.core.brief import extractions
+from ontologizer.core.constraints import remap, same
 from ontologizer.core.run import Run, load_json, now, save_json
 from ontologizer.core.similarity import pair_score, same_label
 from ontologizer.ports.decisions import Question
@@ -365,11 +369,15 @@ def apply(run: Run, project: str, out: Path) -> dict:
                 continue
             seen[(f, r["type"], t)] = {**r, "from": f, "to": t}
             rels.append(seen[(f, r["type"], t)])
+    cons, kstats = _constraints(exs, order, id_of_ref)
     first = exs[order[0]]
     doc = {k: v for k, v in first.items() if k not in ("concepts", "relations", "extractor", "absences", "caveats",
-                                                         "variation", "proposed_values", "proposed_shared")}
+                                                         "variation", "proposed_values", "proposed_shared",
+                                                         "constraints")}
     doc["concepts"] = final
     doc["relations"] = rels
+    if cons:
+        doc["constraints"] = cons
     absences = [a for e in order for a in exs[e].get("absences", [])]
     if absences:
         doc["absences"] = absences
@@ -392,5 +400,50 @@ def apply(run: Run, project: str, out: Path) -> dict:
     doc["caveats"] = [c for e in order for c in exs[e].get("caveats", [])]
     doc["extractors"] = [exs[e].get("extractor", {"id": e}) for e in order]
     doc["reconciled"] = {"run": run.id, "model": res_doc.get("model"), "agreement": rec["agreement_mean"]}
+    if kstats is not None:
+        doc["reconciled"]["constraints"] = kstats
     save_json(out, doc)
-    return {"concepts": len(final), "relations": len(rels), "dropped": len(dropped), "disputes": len(rec["disputes"])}
+    out_ = {"concepts": len(final), "relations": len(rels), "dropped": len(dropped), "disputes": len(rec["disputes"])}
+    if kstats is not None:
+        out_["constraints"] = len(cons)
+    return out_
+
+
+def _constraints(exs: dict[str, dict], order: list[str], id_of_ref: dict[str, str]) -> tuple[list[dict], dict | None]:
+    """Every extractor's constraints, their concept ids remapped to the reconciled concepts. The same constraint
+    stated by two extractors (`constraints.same`: modality, constrained concepts, cited lines) is kept once; the
+    rest is kept from each, as relations are. A term whose concept did not survive reconciliation is unmarked; a
+    constraint left constraining nothing is dropped and listed. None when no extractor stated any."""
+    if not any(exs[e].get("constraints") for e in order):
+        return [], None
+    out: list[dict] = []
+    stated: dict[str, int] = {}
+    dropped, matched, used = [], 0, set()
+    for e in order:
+        stated[e] = 0
+        for k in exs[e].get("constraints", []):
+            k2, notes = remap(k, lambda r, e=e: r if ":" in r else id_of_ref.get(f"{e}:{r}"))
+            if k2 is None:
+                dropped.append({"extractor": e, "id": k.get("id"), "reason": "; ".join(notes)})
+                continue
+            stated[e] += 1
+            twin = next((x for x in out if e not in x["_by"] and same(x, k2)), None)
+            if twin is not None:
+                matched += 1
+                twin["_by"].append(e)
+                more = [i for i in k2.get("inventory", []) if i not in twin.get("inventory", [])]
+                if more:
+                    twin["inventory"] = twin.get("inventory", []) + more
+                continue
+            kid, n = k2["id"], 2
+            while kid in used:
+                kid, n = f"{k2['id']}-{n}", n + 1
+            used.add(kid)
+            out.append({**k2, "id": kid, "_by": [e]})
+    total = sum(stated.values())
+    stats = {"stated": stated, "matched": matched, "kept": len(out), "dropped": dropped,
+             # two extractors: the Jaccard index of their constraints, as the concepts' agreement is
+             "agreement": round(matched / (total - matched), 3) if len(order) > 1 and total - matched else None}
+    for k in out:
+        k.pop("_by")
+    return out, stats

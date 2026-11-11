@@ -236,3 +236,50 @@ SELECT ?ver (GROUP_CONCAT(?of; separator=", ") AS ?graphs) WHERE {
 ```
 
 To restrict a query to one release set, use `FILTER(STRENDS(STR(?g), "@VER"))` in place of the working-graph filter.
+
+## Q14. Constraints on a concept
+
+What a project guarantees, forbids, permits or does not promise about a concept: the constraints that constrain it, and those whose statement only names it. Absent where the study did not extract constraints.
+
+```sparql
+SELECT ?g ?k ?statement ?modality ?role ?src ?status WHERE {
+  GRAPH ?g {
+    ?k a ok:Constraint ; ok:statement ?statement ; ok:modality ?modality .
+    { ?k ok:constrains <CONCEPT_IRI> BIND("constrains" AS ?role) }
+    UNION { ?k ok:usesTerm <CONCEPT_IRI> FILTER NOT EXISTS { ?k ok:constrains <CONCEPT_IRI> } BIND("names" AS ?role) }
+    OPTIONAL { ?k ok:sourceIdentifier ?src } OPTIONAL { ?k ok:status ?status }
+  }
+  FILTER(!CONTAINS(STR(?g), "@"))
+} ORDER BY ?g ?modality
+```
+
+Which projects state a constraint of each modality on concepts mapped to one shared concept (the same question across projects; matching the constraints themselves is not part of the model):
+
+```sparql
+SELECT ?g ?modality (COUNT(DISTINCT ?k) AS ?n) WHERE {
+  GRAPH ?g { ?m ok:mappingSource ?pc ; ok:mappingTarget <SHARED_CONCEPT_IRI> .
+             ?k a ok:Constraint ; ok:constrains ?pc ; ok:modality ?modality }
+  FILTER(!CONTAINS(STR(?g), "@"))
+} GROUP BY ?g ?modality ORDER BY ?g
+```
+
+Terms the statements need that have no concept yet (input for the next extraction):
+
+```sparql
+SELECT ?g ?term (COUNT(?k) AS ?n) WHERE {
+  GRAPH ?g { ?k a ok:Constraint ; ok:candidateTerm ?term }
+  FILTER(!CONTAINS(STR(?g), "@"))
+} GROUP BY ?g ?term ORDER BY DESC(?n)
+```
+
+Concepts of a project graph that no constraint is about (where its study extracted constraints at all):
+
+```sparql
+SELECT ?c ?label WHERE {
+  GRAPH <urn:ontologizer:graph:GRAPH_PATH> {
+    ?c a ok:Concept ; skos:prefLabel ?label .
+    FILTER EXISTS { ?any a ok:Constraint }
+    FILTER NOT EXISTS { ?k ok:constrains ?c }
+  }
+} ORDER BY ?label
+```

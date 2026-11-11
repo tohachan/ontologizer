@@ -4,7 +4,8 @@ Nothing here needs a new source: it holds the working levels to what was already
 
 - every concept of the release is kept, changed, moved or removed; a removal needs a recorded reason
   (`removed:` in a consolidation file), and so does a relation that went away while its ends stayed
-  (`remove_relations:`);
+  (`remove_relations:`), and so does a constraint that went away (`remove_constraints:`), unless every concept
+  it constrained was removed with a reason;
 - a changed definition is checked against the evidence behind the concept, read at its cited commit;
 - a competency question answered in the base run may not lose its answer, and the frame may not lose it;
 - the report is current and the reasoner finds no new clash.
@@ -27,7 +28,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from rdflib import Graph, Namespace
+from rdflib import RDF, Graph, Namespace
 
 from ontologizer.core import frame as framing
 from ontologizer.core.frame import Frame
@@ -60,18 +61,55 @@ def _decisions(run: Run) -> tuple[dict[str, dict], set[tuple[str, str, str]]]:
     return removed, rel
 
 
-def _release_relations(run: Run, engine, version: str) -> dict[tuple[str, str, str], dict]:
-    cfg, out = run.cfg, {}
+def _constraint_decisions(run: Run) -> dict[str, str]:
+    """`remove_constraints: [{ref: <level>:constraint/<id>, reason}]` in the consolidation files."""
+    out = {}
+    for p in sorted((run.cfg.root / "consolidation").glob("*.yaml")):
+        for x in (yaml.safe_load(p.read_text()) or {}).get("remove_constraints") or []:
+            if x.get("ref") and str(x.get("reason") or "").strip():
+                out[x["ref"]] = x["reason"]
+    return out
+
+
+def _release_graphs(run: Run, engine, version: str):
+    """The shared graphs at `version`, each read from the store once, and the function that turns a term of
+    theirs into `<level>:<id>`."""
+    cfg = run.cfg
     ns = {lv: cfg.term_ns(f"{cfg.shared[lv].split('@')[0]}@{version}") for lv in LEVELS if cfg.shared.get(lv)}
 
     def ref(term) -> str | None:
         return next((f"{lv}:{str(term)[len(n):]}" for lv, n in ns.items() if str(term).startswith(n)), None)
 
+    graphs = {}
     for lv in ns:
         text = engine.export_graph(cfg.graph_iri(f"{cfg.shared[lv].split('@')[0]}@{version}"))
         g = Graph()
         if text.strip():
             g.parse(data=text, format="turtle")
+        graphs[lv] = g
+    return graphs, ref
+
+
+def _release_constraints(graphs: dict, ref) -> dict[str, list[str]]:
+    """`{<level>:constraint/<id>: [the concepts it constrains]}` of the release graphs."""
+    out = {}
+    for g in graphs.values():
+        for k in g.subjects(RDF.type, OK.Constraint):
+            r = ref(k)
+            if r:
+                out[r] = sorted(x for x in (ref(c) for c in g.objects(k, OK.constrains)) if x)
+    return out
+
+
+def _working_constraints(run: Run) -> set[str]:
+    import json
+    return {f"{lv}:constraint/{k['id']}" for lv, f in shared_files(run.cfg).items()
+            for k in json.loads(f.read_text()).get("constraints", [])}
+
+
+def _release_relations(graphs: dict, ref) -> dict[tuple[str, str, str], dict]:
+    out = {}
+    for g in graphs.values():
         for r in g.subjects(OK.relFrom, None):
             a, b, t = ref(g.value(r, OK.relFrom)), ref(g.value(r, OK.relTo)), g.value(r, OK.relType)
             if a and b and t is not None:
@@ -206,7 +244,8 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
     moved_map = {m["from"]: m["to"] for m in moved}
     now_rel = _working_relations(run)
     rel_gone = []
-    for (a, t, b) in sorted(_release_relations(run, engine, base)):
+    rgraphs, rref = _release_graphs(run, engine, base)    # read once, for the relations and the constraints
+    for (a, t, b) in sorted(_release_relations(rgraphs, rref)):
         a2, b2 = moved_map.get(a, a), moved_map.get(b, b)
         if (a2, t, b2) in now_rel or a2 not in working or b2 not in working:
             continue     # kept, or an end was removed, which is recorded above
@@ -215,6 +254,22 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
         rel_gone.append({"from": a, "type": t, "to": b, "recorded": recorded})
         if not recorded:
             blocking.append(f"{a} {t} {b}: relation gone with no reason recorded (`remove_relations:`)")
+
+    k_gone = []
+    old_k = _release_constraints(rgraphs, rref)
+    if old_k:
+        now_k, k_rec = _working_constraints(run), _constraint_decisions(run)
+        for r, cons in sorted(old_k.items()):
+            if r in now_k:
+                continue
+            reason = k_rec.get(r)
+            # gone with its concepts: every concept it constrained was removed with a recorded reason
+            with_concepts = bool(cons) and all(c in removed_rec for c in cons)
+            k_gone.append({"ref": r, "reason": reason or ("its constrained concepts were removed" if with_concepts
+                                                          else None)})
+            if not reason and not with_concepts:
+                blocking.append(f"{r}: constraint gone with no reason recorded (`remove_constraints:` in a "
+                                f"consolidation file)")
 
     to_check = changed + [m["to"] for m in moved]
     ev = _evidence_check(run, frame, to_check, working)
@@ -278,7 +333,7 @@ def check(run: Run, frame: Frame, engine, base: str, base_run: str) -> dict:
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
     doc = {"run": run.id, "at": now(), "base": base, "base_run": base_run, "mode": run.mode("verify"),
            "kept": len(kept), "changed": changed, "moved": moved, "added": added, "removed": removed,
-           "relations_gone": rel_gone, "evidence": ev, "min_share": min_share, "questions_lost": cq_lost,
+           "relations_gone": rel_gone, **({"constraints_gone": k_gone} if old_k else {}), "evidence": ev, "min_share": min_share, "questions_lost": cq_lost,
            "questions_downgraded": cq_down, "questions_retired": cq_retired, "disputes": open_disputes, "warnings": warnings, "blocking": blocking}
     save_json(run.path("update-check.json"), doc)
     run.path("update-check.md").write_text(render(doc))

@@ -616,6 +616,9 @@ class Visualizer:
             for p, o in sorted(c.snapshot.graph(giri).predicate_objects(URIRef(iri))):
                 statements.append({"graph": giri, "predicate": str(p), "object": term(o, c.snapshot.id)})
         out["candidates"] = [to_json(r) for r in c.model.candidates if r.source == iri]   # mappings with no target yet
+        # what constrains it, or names it in a statement: shown with the concept, never as nodes
+        out["constraints"] = [{**to_json(k), "role": "constrains" if iri in k.constrains else "term"}
+                              for k in c.model.constraints if iri in k.constrains or iri in k.terms]
         out["statements"] = statements[:MAX_STATEMENTS]
         out["statementsOmitted"] = max(0, len(statements) - MAX_STATEMENTS)
         return out

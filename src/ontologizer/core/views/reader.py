@@ -13,8 +13,8 @@ from collections.abc import Sequence
 from rdflib import OWL, RDF, RDFS, SKOS, BNode, Graph, Literal, Namespace, URIRef
 
 from ontologizer.core.config import KIT
-from ontologizer.core.views.models import (Diagnostic, Entity, Evidence, Label, Project, Relationship, SourceModel,
-                                           VariationChoice)
+from ontologizer.core.views.models import (Constraint, Diagnostic, Entity, Evidence, Label, Project, Relationship,
+                                           SourceModel, VariationChoice)
 from ontologizer.core.views.source import Snapshot
 
 OK = Namespace(KIT)
@@ -66,6 +66,7 @@ def read_model(snap: Snapshot, languages: Sequence[str] = ("en",)) -> SourceMode
     relationships: list[Relationship] = []
     candidates: list[Relationship] = []
     choices: dict[str, list[VariationChoice]] = {}
+    constraints: list[Constraint] = []
     for giri, g in graphs.items():
         record = _Records(g, giri, diagnostics)
         for r in sorted(g.subjects(RDF.type, OK.Relation)):
@@ -96,6 +97,16 @@ def read_model(snap: Snapshot, languages: Sequence[str] = ("en",)) -> SourceMode
                     record=str(ch), graph=giri, dimension=str(f[OK.choiceDimension]), value=str(f[OK.choiceValue]),
                     status=_status(g.value(ch, OK.status)), note=str(note) if note is not None else None,
                     evidence=tuple(read_evidence(g, ch))))
+        for k in sorted(g.subjects(RDF.type, OK.Constraint)):
+            f = record.fields(k, required=(OK.statement, OK.modality), optional=(OK.constraintKind,))
+            if f:
+                constraints.append(Constraint(
+                    record=str(k), graph=giri, statement=str(f[OK.statement]), modality=str(f[OK.modality]),
+                    kind=_iri(f.get(OK.constraintKind)), constrains=tuple(sorted(str(c) for c in g.objects(k, OK.constrains))),
+                    terms=tuple(sorted(str(c) for c in g.objects(k, OK.usesTerm))),
+                    candidate_terms=tuple(sorted(str(t) for t in g.objects(k, OK.candidateTerm))),
+                    source_id=_text(g.value(k, OK.sourceIdentifier)), status=_status(g.value(k, OK.status)),
+                    note=_text(g.value(k, OK.note)), evidence=tuple(read_evidence(g, k))))
         for s, o in sorted(g.subject_objects(RDFS.subClassOf)):
             if isinstance(s, URIRef) and isinstance(o, URIRef) and str(s) in entities:
                 relationships.append(_statement("class-inheritance", s, RDFS.subClassOf, o, giri, "subclass-v1"))
@@ -107,8 +118,10 @@ def read_model(snap: Snapshot, languages: Sequence[str] = ("en",)) -> SourceMode
     relationships.sort(key=lambda r: (r.kind, r.source, r.type, r.target or "", r.graph, r.id))
     candidates.sort(key=lambda r: (r.source, r.graph, r.id))
     diagnostics.sort(key=lambda d: (d.code, d.subject, d.graph))
+    constraints.sort(key=lambda k: (k.record, k.graph))
     return SourceModel(snapshot_id=snap.id, entities=entities, relationships=tuple(relationships),
-                       candidates=tuple(candidates), projects=projects, diagnostics=tuple(diagnostics))
+                       candidates=tuple(candidates), projects=projects, diagnostics=tuple(diagnostics),
+                       constraints=tuple(constraints))
 
 
 class _Records:

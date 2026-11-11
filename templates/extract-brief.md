@@ -37,7 +37,7 @@ For each concept:
 - `evidence`: at least one `{{path, lines, kind}}`; `path` relative to the repository root, `lines` like `"40-88"`, `kind` one of `code|doc|test|config`. Read the lines before citing them. When code and docs disagree, set `status: "disputed"`, cite both and explain in `note`. Otherwise `status: "hypothesis"`.
 - No `maps_to`.
 
-{variation_block}
+{variation_block}{constraint_block}
 
 Relations between your concepts: `{{from, to, type, label, evidence, inventory}}`, `type` one of {relation_types}; `inventory`: the property ids above that the relation states (empty when none).
 

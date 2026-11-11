@@ -37,6 +37,7 @@ The shapes you will query:
 - **Mapping** (project concept → shared concept): `ok:mappingSource`, `ok:mappingTarget`, `ok:mappingKind` (equivalence, specialization, roleOf, realization, partial), `ok:status`, `ok:confidence`, `ok:note`. `ok:candidateLabel` means the target is proposed and not yet in a shared graph.
 - **Relation**: `ok:relFrom`, `ok:relTo`, `ok:relType` (partOf, dependsOn, uses, produces, participatesIn, mediates, owns, triggers, hasPhase, associatedWith), `rdfs:label` (the verb phrase as read), `ok:status`, `ok:evidence`.
 - **VariationChoice**: `ok:choiceProject`, `ok:choiceDimension`, `ok:choiceValue`, `ok:note`, `ok:evidence`.
+- **Constraint** (what a project guarantees, forbids, permits or does not promise; only where a study extracted them): `ok:statement` (prose), `ok:modality` (`ok:necessity`, `ok:impossibility`, `ok:obligation`, `ok:prohibition`, `ok:permission`, `ok:nonGuarantee`), `ok:constraintKind` (`ok:structuralRule`, `ok:operativeRule`, `ok:promiseBoundary`), `ok:constrains` (the concepts it is about), `ok:usesTerm` (every concept the statement names), `ok:candidateTerm` (a term with no concept yet), `ok:sourceIdentifier`, `ok:level`, `ok:status`, `ok:evidence`, `ok:inProject`. It is a claim with evidence, not a rule the store enforces: say so when you report one.
 - **Evidence**: `ok:sourceKind` (code, doc, test, config, graph, plan), `ok:sourcePath`, sometimes `ok:sourceRepo`, `ok:sourceLines`, `ok:sourceCommit`.
 - **Status** (`ok:status`): `ok:asserted`, `ok:inferred`, `ok:hypothesis`, `ok:disputed`. Always say the status when it is not `asserted`.
 
@@ -65,7 +66,7 @@ Rules of thumb:
 The user asks open questions such as "how is X organised", "what is X related to", "where does the shared model disagree with project P".
 
 - Resolve every term in the question to IRIs first (Q3). If it is ambiguous, show the candidates with their definitions and ask the user which one they mean.
-- Build the answer from concept cards (Q4), neighbours (Q5), the hierarchy (Q6), what realises the concept in each project (Q7) and variation (Q9).
+- Build the answer from concept cards (Q4), neighbours (Q5), the hierarchy (Q6), what realises the concept in each project (Q7), variation (Q9) and, where there are any, constraints (Q14).
 - Reason out loud, but keep two layers apart: **"The ontology says"** (facts with IRIs and status) and **"My inference"** (your conclusions from those facts). An inference that would need a new concept, relation or mapping is a proposal for the owner, not a fact.
 - Count support: a shared concept that 2 projects realise is not the same as one that 8 realise. Q7 gives these counts.
 

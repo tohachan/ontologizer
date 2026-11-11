@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from ontologizer.core.config import GUFO, KIT
+from ontologizer.core.constraints import KIND_TERMS, MODALITIES, MODALITY_TERMS
 
 STATUSES = ("asserted", "inferred", "hypothesis", "disputed")
 MAPPING_KINDS = ("equivalence", "specialization", "roleOf", "realization", "partial")
@@ -86,6 +87,9 @@ class Preset:
         allowed = " || ".join(
             f"(?sl = <{level_iri(s)}> && ?tl = <{level_iri(t)}> && ?k = ok:{k})"
             for s, t, k in self.allowed_mappings())
+        modalities = " ".join(f"ok:{MODALITY_TERMS[m]}" for m in MODALITIES)
+        ckinds = " ".join(f"ok:{KIND_TERMS[k]}" for k in KIND_TERMS)
+        kind_ok = " || ".join(f"(?m = ok:{MODALITY_TERMS[m]} && ?k = ok:{KIND_TERMS[k]})" for m, k in MODALITIES.items())
         evidence_min = 1 if role in ("project", "domain", "task") else 0
         commit_required = role == "project"
         s = [PREFIXES, f"# Generated from preset {self.name} for role {role}. Do not edit.\n"]
@@ -138,6 +142,35 @@ ok:RelationShape a sh:NodeShape ; sh:targetClass ok:Relation ;
   sh:property [ sh:path ok:relTo ; sh:minCount 1 ; sh:maxCount 1 ; sh:class ok:Concept ] ;
   sh:property [ sh:path ok:relType ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ({rels}) ] ;
   sh:property [ sh:path ok:status ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ({statuses}) ] .
+
+ok:ConstraintShape a sh:NodeShape ; sh:targetClass ok:Constraint ;
+  sh:property [ sh:path ok:statement ; sh:minCount 1 ; sh:maxCount 1 ; sh:message "a constraint needs one statement" ] ;
+  sh:property [ sh:path ok:modality ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ({modalities}) ] ;
+  sh:property [ sh:path ok:constraintKind ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ({ckinds}) ] ;
+  sh:property [ sh:path ok:constrains ; sh:minCount 1 ; sh:class ok:Concept ;
+                sh:message "a constraint constrains concepts that exist in the validation context" ] ;
+  sh:property [ sh:path ok:usesTerm ; sh:class ok:Concept ;
+                sh:message "a term of a constraint's statement is a concept that exists in the validation context" ] ;
+  sh:property [ sh:path ok:level ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ({levels}) ;
+                sh:message "constraint level not allowed in a {role} graph" ] ;
+  sh:property [ sh:path ok:status ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ({statuses}) ] ;
+  sh:property [ sh:path ok:evidence ; sh:minCount {evidence_min} ; sh:class ok:Evidence ;
+                sh:message "every claim about a project needs evidence" ] ;
+  sh:sparql [
+    sh:message "the constraint kind does not follow from its modality" ;
+    sh:select \"\"\"
+      PREFIX ok: <{KIT}>
+      SELECT $this WHERE {{
+        $this ok:modality ?m ; ok:constraintKind ?k .
+        FILTER (!({kind_ok}))
+      }}\"\"\" ] ;
+  sh:sparql [
+    sh:message "a constrained concept is named among the terms of the statement" ;
+    sh:select \"\"\"
+      PREFIX ok: <{KIT}>
+      SELECT $this WHERE {{
+        $this ok:constrains ?c . FILTER NOT EXISTS {{ $this ok:usesTerm ?c }}
+      }}\"\"\" ] .
 
 ok:DisputedShape a sh:NodeShape ;
   sh:targetSubjectsOf ok:status ;

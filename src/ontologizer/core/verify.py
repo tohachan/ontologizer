@@ -1,7 +1,7 @@
 """Stage 6: verify every claim of a project and recheck disputed judgements (docs/process.md §6).
 
-- Every evidence item of every claim (concepts, relations, variation choices,
-  mappings) is re-read from the source at its commit. Missing files or lines
+- Every evidence item of every claim (concepts, relations, constraints, variation
+  choices, mappings) is re-read from the source at its commit. Missing files or lines
   fail mechanically. The decision port judges whether the lines support the
   claim (`noul`); in llm mode the answering model must differ from every model
   that wrote the extraction.
@@ -18,7 +18,8 @@
 - `--apply` drops evidence whose negative judgement a recheck (or the owner, in
   `verify/<p>.owner.json`) confirmed and evidence whose lines are missing, removes
   claims left without any, records every removed claim with its reason and its
-  original form (relations removed with an end included), keeps unconfirmed
+  original form (relations removed with an end, and constraints with the concepts they constrain, included;
+  a constraint's term whose concept was removed is unmarked), keeps unconfirmed
   negatives as `unverified`, and applies the recheck verdicts to `application/<p>.json`.
 """
 
@@ -30,6 +31,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from ontologizer.core.constraints import claim_text, remap
 from ontologizer.core.run import Run, load_json, now, save_json
 from ontologizer.core.shared import LEVELS, application_file, local_shared_file
 from ontologizer.core.sources import evidence_source
@@ -86,6 +88,9 @@ def claims(doc: dict) -> list[dict]:
         out.append({"id": f"relation:{r['from']}--{r['type']}--{r['to']}", "kind": "relation",
                     "text": f"In the project {p}, '{f}' {r['type']} '{t}'" + (f" ({r['label']})" if r.get("label") else ""),
                     "evidence": r.get("evidence", [])})
+    for k in doc.get("constraints", []):
+        out.append({"id": f"constraint:{k['id']}", "kind": "constraint",
+                    "text": claim_text(p, k, label.get), "evidence": k.get("evidence", [])})
     for v in doc.get("variation", []):
         out.append({"id": f"variation:{v['dimension']}--{v['value']}", "kind": "variation",
                     "text": f"The project {p} takes value '{v['value']}' on dimension '{v['dimension']}'"
@@ -584,7 +589,7 @@ def apply(run: Run, project: str, keep_failed: bool = False) -> dict:
             unverified.append({"id": eid, "claim": it["claim"], "path": it["path"], "lines": it.get("lines"),
                                "p": it.get("p"), "judge": it.get("judge"),
                                "in_recheck": any(i["id"] == eid for i in rc["items"])})
-    removed, detached, dropped_ev, kept_unverified = [], [], 0, []
+    removed, detached, dropped_ev, kept_unverified, detached_terms = [], [], 0, [], []
 
     def prune(cid: str, evs: list) -> list:
         nonlocal dropped_ev
@@ -664,6 +669,34 @@ def apply(run: Run, project: str, keep_failed: bool = False) -> dict:
         flag_claim(rid, r)
         rels.append(r)
     doc["relations"] = rels
+    if "constraints" in doc:
+        kept_k = []
+        for k in doc["constraints"]:
+            kid = f"constraint:{k['id']}"
+            orig = copy.deepcopy(k)
+            k2, notes = remap(k, lambda r: None if r in gone else r)
+            if k2 is None:   # removed with the concepts it constrains, recorded so the owner can restore it
+                ends = [x for x in k.get("constrains", []) if x in gone]
+                removed.append({"claim": kid, "reason": "removed with what it constrains: "
+                                + ", ".join(f"concept:{x}" for x in ends),
+                                "cascade_of": [f"concept:{x}" for x in ends],
+                                "own_evidence": own_verdicts.get(kid, {}), "restore": orig})
+                continue
+            if notes:
+                detached_terms.append({"constraint": kid, "changes": notes})
+            had = bool(k2.get("evidence"))
+            k2["evidence"] = prune(kid, k2.get("evidence", []))
+            if had and not k2["evidence"] and not keep_failed:
+                removed.append({"claim": kid, "reason": why_removed(kid), "restore": orig})
+                continue
+            flag_claim(kid, k2)
+            if k2.get("status") == "disputed" and len(k2["evidence"]) < 2:   # rule 11.4 needs both readings
+                k2["status"] = "hypothesis"
+                k2["note"] = (k2.get("note", "") + f" Dispute dropped in stage 6 ({run.id}): the evidence of one "
+                              "reading did not hold.").strip()
+                undisputed.append(kid)
+            kept_k.append(k2)
+        doc["constraints"] = kept_k
     var = []
     for x in doc.get("variation", []):
         vid = f"variation:{x['dimension']}--{x['value']}"
@@ -729,7 +762,8 @@ def apply(run: Run, project: str, keep_failed: bool = False) -> dict:
     for t in by_type.values():
         t["change_rate"] = round(t["changed"] / t["rechecked"], 3) if t["rechecked"] else None
     stats = {"removed_claims": removed, "removed_with_an_end": sum(1 for r in removed if r.get("cascade_of")),
-             "detached_broader": detached, "dropped_evidence": dropped_ev, "rechecks_changed": changed,
+             "detached_broader": detached, **({"detached_terms": detached_terms} if detached_terms else {}),
+             "dropped_evidence": dropped_ev, "rechecks_changed": changed,
              "unverified": unverified, "kept_unverified": kept_unverified,
              "no_rechecker": blind,
              "recheck_by_type": by_type,

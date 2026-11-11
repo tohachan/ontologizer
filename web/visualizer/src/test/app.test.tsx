@@ -133,6 +133,27 @@ it('the inspector shows candidate mappings and the project\'s variation', async 
   expect(within(inspector).getByLabelText('variation').textContent).toContain('SQL');
 });
 
+it('the inspector lists the constraints of a concept', async () => {
+  routes = { ...routes };
+  const detail = JSON.parse(JSON.stringify(orderDetail));
+  detail.entities[0].constraints = [
+    { record: 'urn:sample:constraint/one', graph: 'g', statement: 'an Order is paid once', modality: 'urn:ontologizer:kit:necessity',
+      kind: 'urn:ontologizer:kit:structuralRule', constrains: [detail.entities[0].iri], terms: [detail.entities[0].iri],
+      candidateTerms: ['payment attempt'], sourceId: 'INV-01', status: 'hypothesis', note: null, evidence: [], role: 'constrains' },
+    { record: 'urn:sample:constraint/two', graph: 'g', statement: 'a Refund follows an Order', modality: 'urn:ontologizer:kit:obligation',
+      kind: 'urn:ontologizer:kit:operativeRule', constrains: ['urn:sample:Refund'], terms: [detail.entities[0].iri, 'urn:sample:Refund'],
+      candidateTerms: [], sourceId: null, status: 'asserted', note: null, evidence: [], role: 'term' }];
+  routes['GET /compilations/c1/elements/entity:order'] = () => ({ body: detail });
+  await toDiagram();
+  fireEvent.click(within(screen.getByLabelText('concept Order')).getByText('Order'));
+  const inspector = await screen.findByLabelText('inspector');
+  const list = await within(inspector).findByLabelText('constraints');
+  expect(list.textContent).toContain('an Order is paid once');
+  expect(list.textContent).toContain('INV-01');
+  expect(list.textContent).toContain('terms without a concept: payment attempt');
+  expect(list.textContent).toContain('constrains Refund');
+});
+
 it('the overview takes the service\'s spec and compiles it on the snapshot it read', async () => {
   const spec = {
     schemaVersion: 1, id: 'overview', title: 'Overview of study',

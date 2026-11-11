@@ -21,6 +21,8 @@ families:                      # the comparison corpus by architectural family
                                # preset's confirmation threshold); below that threshold it stays a hypothesis
 # sources:                       # optional, per project: `description` for a text about a subject, not a system
 #   project-3: {kind: description, origin: where the text comes from}   # a retelling adds `derived_from: <source>`
+# constraints:                   # optional: also extract constraints (docs/process.md §Constraints)
+#   scope: The invariants and promise boundaries each project states as such.
 overlay: []                    # projects mapped onto a release later; never read while building shared levels
 competency_questions:
   - id: cq1

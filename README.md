@@ -18,7 +18,7 @@ Concepts are placed on the four levels of Guarino (FOIS 1998):
 3. **Task**: shared activities and processes (for example, reviewing a change or deploying a release), independent of a particular project.
 4. **Application**: the concepts of one project, each mapped to domain and task concepts as an equivalence, a specialization, a role, a realization or a partial overlap.
 
-Beside the levels runs a second axis, **variation**: the design dimensions on which projects differ, and the value each project chose. The levels, the allowed mappings between them and the accepted upper categories are data in a preset ([`presets/guarino-4.yaml`](presets/guarino-4.yaml)), not code.
+Beside the levels runs a second axis, **variation**: the design dimensions on which projects differ, and the value each project chose. A study may also collect **constraints**: what a project guarantees, forbids, permits or does not promise, stated in the terms of its concepts, with an SBVR modality and evidence ([docs/process.md](docs/process.md#constraints)). They are reified claims, not axioms. The levels, the allowed mappings between them and the accepted upper categories are data in a preset ([`presets/guarino-4.yaml`](presets/guarino-4.yaml)), not code.
 
 ## Standards
 
@@ -29,7 +29,7 @@ The ontology is plain W3C RDF throughout, so any RDF tool can read it:
 | **RDF 1.1**, named graphs | Each part of the ontology (a shared level, a project, a release) is one named graph, `urn:ontologizer:graph:<path>`. Turtle for releases and pinned sources, N-Triples on the wire |
 | **OWL 2 / RDFS** | Concepts are `owl:Class` with `rdfs:subClassOf` hierarchies; the kit vocabulary (`kit/vocab.ttl`) declares its classes and properties in OWL with RDFS domains and ranges |
 | **SKOS** | `skos:prefLabel`, `skos:altLabel` (synonyms and each project's own names) and `skos:definition` on every concept; variation dimensions are `skos:ConceptScheme`s and their values `skos:inScheme` |
-| **SHACL** | Shapes are generated from the level preset: core constraints plus SHACL-SPARQL rules (which mapping kinds may link which levels, that a mapping target exists, that a disputed claim keeps both readings). Every write is validated against the graph and its validation context before it reaches the store |
+| **SHACL** | Shapes are generated from the level preset: core constraints plus SHACL-SPARQL rules (which mapping kinds may link which levels, that a mapping target exists, that a disputed claim keeps both readings, that a constraint's terms are concepts of the validation context and its kind follows from its modality). Every write is validated against the graph and its validation context before it reaches the store |
 | **SPARQL 1.1** | Query for every read (`query`, exports, the `query-ontology` skill); Update for writes, where one request replaces one graph in one transaction |
 | **PROV-O** | Evidence nodes are `prov:Entity`, and `ok:evidence` is a sub-property of `prov:wasDerivedFrom` |
 | **Dublin Core Terms** | `dcterms:isVersionOf` links a release term to its working term |

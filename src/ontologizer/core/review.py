@@ -31,6 +31,7 @@ from pathlib import Path
 import yaml
 
 from ontologizer.core import frame as framing
+from ontologizer.core.constraints import plain, prune as prune_constraints
 from ontologizer.core.frame import Frame
 from ontologizer.core.run import Run, load_json, now, save_json
 from ontologizer.core.shared import application_docs, carry_dispute, disputes, shared_files
@@ -143,6 +144,7 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
     for i in items:
         i["fingerprint"] = _fingerprint(i)
     relations = _relation_items(run, docs)
+    constraints = _constraint_items(run)
     doc = {"run": run.id, "built": now(), **({"since": since} if since else {}),
            "instructions": "Set `verdict` of every item and relation with an empty one to accept, reject or revise "
                            "(with `comment`; `revise` keeps a relation unchanged, so reject one that is wrong), "
@@ -164,42 +166,51 @@ def build(run: Run, frame: Frame, since: str | None = None) -> dict:
                            "or a declared dispute makes it `disputed` whatever the verdict, until a consolidation "
                            "file settles it with a reason.",
            "items": items, "relations": relations}
+    if constraints:
+        doc["instructions"] += (" A constraint of a shared level is judged as a concept is: accept it when its "
+                                "statement, modality and constrained concepts hold for the level; reject it otherwise.")
+        doc["constraints"] = constraints
     p = review_path(run)
     p.parent.mkdir(parents=True, exist_ok=True)
     kept = 0
     if p.is_file():   # verdicts stand for what has not changed since they were given
-        kept = _carry(_with_carried_as(run.cfg, yaml.safe_load(p.read_text()) or {}), items, relations)
+        kept = _carry(_with_carried_as(run.cfg, yaml.safe_load(p.read_text()) or {}), items, relations, constraints)
     carried = 0
     if since:
         q = _runs_dir(run.cfg) / since / "review.yaml"
-        carried = _carry(yaml.safe_load(q.read_text()) or {}, items, relations, accepted_only=True, source=since)
+        carried = _carry(yaml.safe_load(q.read_text()) or {}, items, relations, constraints, accepted_only=True,
+                         source=since)
     p.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=120))
-    open_ = sum(1 for i in items + relations if not i.get("verdict"))
+    open_ = sum(1 for i in items + relations + constraints if not i.get("verdict"))
     changed = [{"ref": i["ref"], **i["support_changed"]} for i in items if i.get("support_changed")]
     counter = [{"ref": r["ref"], **r["counterpart_changed"]} for r in relations if r.get("counterpart_changed")]
-    return {"items": len(items), "relations": len(relations), "open": open_, "kept": kept, "carried": carried,
-            "support_changed": changed, "counterpart_changed": counter, "reopened": sum(1 for i in items + relations if i.get("reopened")),
-            "path": str(p)}
+    return {"items": len(items), "relations": len(relations), **({"constraints": len(constraints)} if constraints else {}),
+            "open": open_, "kept": kept, "carried": carried,
+            "support_changed": changed, "counterpart_changed": counter,
+            "reopened": sum(1 for i in items + relations + constraints if i.get("reopened")), "path": str(p)}
 
 
 def _fingerprint(i: dict) -> str:
     """What a verdict was given on. A verdict does not outlive a change to it."""
-    if "from" in i:
+    if "statement" in i:
+        what = [i["ref"], i["statement"], i.get("modality"), i.get("constrains")]
+    elif "from" in i:
         what = [i["ref"], i.get("label")]
     else:
         what = [i["ref"], i["label"], i["category"], i["definition"]]
     return hashlib.sha256(json.dumps(what, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
-def _carry(old: dict, items: list[dict], relations: list[dict], accepted_only: bool = False,
-           source: str | None = None) -> int:
+def _carry(old: dict, items: list[dict], relations: list[dict], constraints: list[dict] | None = None,
+           accepted_only: bool = False, source: str | None = None) -> int:
     def same(o: dict, i: dict) -> bool:
         if o.get("fingerprint"):
             return o["fingerprint"] == i["fingerprint"]
         return (o.get("definition"), o.get("category")) == (i.get("definition"), i.get("category"))  # an older file
 
     n = 0
-    for mine, theirs in ((items, old.get("items", [])), (relations, old.get("relations", []))):
+    for mine, theirs in ((items, old.get("items", [])), (relations, old.get("relations", [])),
+                         (constraints or [], old.get("constraints", []))):
         by_ref = {x["ref"]: x for x in theirs}
         for i in mine:
             o = by_ref.get(i["ref"])
@@ -233,14 +244,14 @@ def _with_carried_as(cfg, old: dict) -> dict:
     """A file written before `carried_as` existed: read what each carried verdict was from the review it came from,
     so a comment the reviewer has since changed counts as the reviewer's own."""
     cache: dict[str, dict] = {}
-    for x in old.get("items", []) + old.get("relations", []):
+    for x in old.get("items", []) + old.get("relations", []) + old.get("constraints", []):
         src = x.get("carried_from")
         if not src or "carried_as" in x:
             continue
         if src not in cache:
             q = _runs_dir(cfg) / src / "review.yaml"
             d = (yaml.safe_load(q.read_text()) or {}) if q.is_file() else {}
-            cache[src] = {y["ref"]: y for y in d.get("items", []) + d.get("relations", [])}
+            cache[src] = {y["ref"]: y for y in d.get("items", []) + d.get("relations", []) + d.get("constraints", [])}
         o = cache[src].get(x["ref"])
         if o is not None:
             x["carried_as"] = {"verdict": o.get("verdict"), "comment": o.get("comment")}
@@ -341,6 +352,25 @@ def _relation_items(run: Run, docs: dict[str, dict]) -> list[dict]:
     return out
 
 
+def _constraint_items(run: Run) -> list[dict]:
+    """The constraints of the shared levels, for a verdict each. Empty when the shared levels have none."""
+    out = []
+    for lv, f in shared_files(run.cfg).items():
+        d = json.loads(f.read_text())
+        labels = {c["id"]: c["label"] for c in d.get("concepts", [])}
+        for k in d.get("constraints", []):
+            item = {"ref": f"{lv}:constraint/{k['id']}", "statement": plain(k["statement"], labels.get),
+                    "modality": k["modality"], "constrains": [_ref(lv, x) for x in k.get("constrains", [])],
+                    "status": k.get("status", "hypothesis"),
+                    "evidence": [f"{e['path']}:{e.get('lines', '')}" for e in k.get("evidence", [])[:2]],
+                    "verdict": None, "comment": None}
+            if k.get("source_id"):
+                item["source_id"] = k["source_id"]
+            item["fingerprint"] = _fingerprint(item)
+            out.append(item)
+    return out
+
+
 def _ref(level: str, end: str) -> str:
     return end if ":" in end else f"{level}:{end}"
 
@@ -352,10 +382,11 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
     doc = yaml.safe_load(p.read_text()) or {}
     items = doc.get("items", [])
     relations = doc.get("relations", [])
-    missing = [i["ref"] for i in items + relations if i.get("verdict") not in VERDICTS]
+    constraints = doc.get("constraints", [])
+    missing = [i["ref"] for i in items + relations + constraints if i.get("verdict") not in VERDICTS]
     if missing:
         raise ReviewError(f"{len(missing)} item(s) without a verdict (accept|reject|revise): {missing[:10]}")
-    bad = [i["ref"] for i in items + relations if i["verdict"] == "revise" and not i.get("comment")]
+    bad = [i["ref"] for i in items + relations + constraints if i["verdict"] == "revise" and not i.get("comment")]
     if bad:
         raise ReviewError(f"revise needs a comment: {bad[:10]}")
     verdict = {i["ref"]: i for i in items}
@@ -410,6 +441,7 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
                               if _ref(lv, r["from"]) not in rejected and _ref(lv, r["to"]) not in rejected
                               and f"{_ref(lv, r['from'])}--{r['type']}--{_ref(lv, r['to'])}" not in gone_rel]
             save_json(f, d)
+    kstats = _apply_constraints(run, by, {i["ref"]: i for i in constraints}, rejected)
     unbound = 0
     app_dir = run.cfg.path("application")
     for f in sorted(app_dir.glob("*.json")):
@@ -421,10 +453,17 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
             if len(c["maps_to"]) != n:
                 ch = True
                 unbound += n - len(c["maps_to"])
+        if d.get("constraints"):   # a project constraint on a rejected shared concept follows it out
+            kept, gone_k, changed_k = prune_constraints(d["constraints"], lambda r: None if r in rejected else r)
+            if gone_k or changed_k:
+                d["constraints"] = kept
+                ch = True
+                kstats["project_removed"] += len(gone_k)
+                kstats["project_terms_unmarked"] += len(changed_k)
         if ch:
             save_json(f, d)
     covers = {str(f.relative_to(run.cfg.root)): framing.sha256(f) for f in shared_files(run.cfg).values()}
-    carried = sum(1 for i in items + relations if is_carried(i))
+    carried = sum(1 for i in items + relations + constraints if is_carried(i))
     changed = sum(1 for i in items if i.get("support_changed"))
     counter = sum(1 for r in relations if r.get("counterpart_changed"))
     note = f"run {run.id}" + (f"; reviewer effort {effort}" if effort else "") \
@@ -434,7 +473,38 @@ def apply(run: Run, by: str, effort: str | None = None) -> dict:
     entry = framing.approve(run.cfg, "review", p, by=by, at=now(), note=note, covers=covers)
     return {**counts, "accepted_unconfirmed": unconfirmed, "disputed": disputed, "one_sided": one_sided,
             "mappings_removed": unbound, "gate": entry, "relations_rejected": len(gone_rel), "carried": carried,
-            "support_changed": changed, "counterpart_changed": counter}
+            "support_changed": changed, "counterpart_changed": counter,
+            **({"constraints": kstats} if constraints or any(kstats.values()) else {})}
+
+
+def _apply_constraints(run: Run, by: str, verdict: dict[str, dict], rejected: set[str]) -> dict:
+    """Verdicts on the shared levels' constraints; a constraint whose constrained concepts were all rejected goes
+    with them, a term naming a rejected concept is unmarked. Files without constraints are not touched."""
+    st = {"accept": 0, "reject": 0, "revise": 0, "removed_with_concepts": 0, "terms_unmarked": 0,
+          "project_removed": 0, "project_terms_unmarked": 0}
+    for lv, f in shared_files(run.cfg).items():
+        d = json.loads(f.read_text())
+        if not d.get("constraints"):
+            continue
+        kept, gone_k, changed_k = prune_constraints(d["constraints"],
+                                                    lambda r, lv=lv: None if _ref(lv, r) in rejected else r)
+        st["removed_with_concepts"] += len(gone_k)
+        st["terms_unmarked"] += len(changed_k)
+        out = []
+        for k in kept:
+            i = verdict.get(f"{lv}:constraint/{k['id']}")
+            if i is not None:
+                st[i["verdict"]] += 1
+                if i["verdict"] == "reject":
+                    continue
+                k["status"] = "asserted" if i["verdict"] == "accept" else "hypothesis"
+                if i.get("comment") and (i["verdict"] == "revise" or not is_carried(i)):
+                    _note(k, by, run.id, i["comment"])
+            out.append(k)
+        if out != d["constraints"]:
+            d["constraints"] = out
+            save_json(f, d)
+    return st
 
 
 def _note(c: dict, by: str, run_id: str, comment: str) -> None:

@@ -3,7 +3,8 @@
 The frame is markdown with a YAML header. The header is what code reads: the
 domains, the reuse list, the corpus by architectural family, the overlay
 target, the competency questions and the preset; optionally the variation
-dimensions (the second axis of comparison, asked of every extraction) and
+dimensions (the second axis of comparison, asked of every extraction), the
+constraints the study extracts (`constraints: {scope}`) and
 design targets (requirement profiles: competency questions tagged with
 `target:` that the run report answers per project as a fit matrix). The body explains them to
 people and must have the sections of `templates/frame.md`.
@@ -151,6 +152,9 @@ def check(text: str, preset_names: list[str] | None = None, project: str | None 
             errs.append(f"retired_questions[{i}]: {r['id']} is still a competency question")
     for t in tids - {q.get("target") for q in cqs}:
         errs.append(f"targets.{t}: no competency question carries `target: {t}`")
+    cons = h.get("constraints")
+    if cons is not None and not (isinstance(cons, dict) and str(cons.get("scope") or "").strip()):
+        errs.append("constraints: {scope: what counts as a constraint in this study} when present")
     if "out_of_scope" not in h:
         errs.append("out_of_scope: required (may be an empty list)")
     heads = {m.strip() for m in re.findall(r"^##\s+(.+)$", body, re.M)}
@@ -219,6 +223,12 @@ class Frame:
     @property
     def targets(self) -> list[dict]:
         return list(self.h.get("targets") or [])
+
+    @property
+    def constraints(self) -> dict | None:
+        """`constraints: {scope}`: the study extracts constraints, of the kind `scope` says. None: it does not."""
+        c = self.h.get("constraints")
+        return c if isinstance(c, dict) and str(c.get("scope") or "").strip() else None
 
 
 def sync_variation(cfg: Config, frame: "Frame") -> Path:
