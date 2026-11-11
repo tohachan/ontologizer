@@ -30,9 +30,11 @@ ACCOUNTED_KINDS = ("property", "shape", "individual", "scheme", "ontology")
 
 
 def accounted_ids(app: dict) -> set[str]:
-    """Every inventory id an extraction lists: in concepts, relations, and object-form caveats and absences."""
+    """Every inventory id an extraction lists: in concepts, relations, constraints, and object-form caveats and
+    absences."""
     out = {x for c in app.get("concepts", []) for x in c.get("inventory", [])}
     out |= {x for r in app.get("relations", []) for x in r.get("inventory", [])}
+    out |= {x for k in app.get("constraints", []) for x in k.get("inventory", [])}
     for key in ("caveats", "absences"):
         out |= {x for c in app.get(key, []) if isinstance(c, dict) for x in c.get("inventory", [])}
     return out

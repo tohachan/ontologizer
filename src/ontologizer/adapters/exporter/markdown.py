@@ -147,6 +147,21 @@ class MarkdownExporter:
                     self._label(union, g.value(r, OK.relTo)), _local(g.value(r, OK.status), self.cfg),
                 ]) + " | " + self._evidence(g, r) + " |")
             lines.append("")
+        cons = sorted(g.subjects(RDF.type, OK.Constraint))
+        if cons:
+            lines += ["## Constraints", "", "| Constraint | Modality | Constrains | Status | Evidence |",
+                      "| --- | --- | --- | --- | --- |"]
+            for k in cons:
+                src_id = g.value(k, OK.sourceIdentifier)
+                cand = sorted(str(t) for t in g.objects(k, OK.candidateTerm))
+                text = str(g.value(k, OK.statement) or "") + (f" ({src_id})" if src_id else "") \
+                    + (f"<br>terms without a concept: {', '.join(cand)}" if cand else "")
+                lines.append("| " + " | ".join(_cell(x) for x in [
+                    text, _local(g.value(k, OK.modality), self.cfg),
+                    ", ".join(sorted(self._label(union, c) for c in g.objects(k, OK.constrains))),
+                    _local(g.value(k, OK.status), self.cfg),
+                ]) + " | " + self._evidence(g, k) + " |")
+            lines.append("")
         dims = sorted(g.subjects(RDF.type, OK.VariationDimension))
         if dims:
             lines += ["## Variation dimensions", ""]

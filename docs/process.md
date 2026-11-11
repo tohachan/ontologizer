@@ -75,6 +75,7 @@ A research agent writes `frame.md` from the template `templates/frame.md`. The f
 - optionally, the **variation dimensions**: the decisions projects differ on, each with its values. Every extraction reports the values its project takes, with evidence. `ontologizer frame variation` writes them into the shared variation level;
 - optionally, `admission_families`, when the ontology grows from whatever sources exist instead of a comparison corpus: the families a concept needs to enter the shared levels (see §5);
 - optionally, `sources`: per project, `kind: description` for a text about a subject rather than a system's own source (see §2), with its `origin`, and `derived_from` when it retells another source of the corpus: it must then sit in that source's family;
+- optionally, `constraints: {scope}`: the study also extracts **constraints**, of the kind `scope` says (for example "the invariants and promise boundaries the project states as such"). See [Constraints](#constraints). Without the key nothing is asked and nothing changes;
 - optionally, **design targets**: a system the study should help build or choose, described as requirements. Each requirement is a competency question tagged `target: <id>`. The run report answers it per project (`full`, `partial`, `none`), names the concepts that realize it — the parts to reuse — and ranks the projects by fit.
 
 The frame's `study` repeats the config's `project`: the name comes from there, since graphs and IRIs follow it, and is chosen when the topic is created, never taken from a source.
@@ -97,6 +98,8 @@ Each project is extracted at least twice, independently, by different models: Op
 
 The brief also lists the frame's variation dimensions. The extraction records each value the project takes, with evidence, and proposes a new value when none fits.
 
+When the frame has `constraints:`, the brief asks for them too ([Constraints](#constraints)); they go into `constraints`, not `caveats`. A project split into parts keeps them, their concept ids renamed with the concepts'.
+
 A source with `kind: description` gets its own brief. What it says is its author's claim, its evidence is `kind: doc`, and what extraction JSON cannot carry (rules, limits, recommendations, sample systems) goes into `caveats`, not into definitions. An adapter or a converter is not needed for such a source to be cited: it only has to be text under git, either its own repository or a directory committed inside a larger one, such as the owner's. The built-in `rdf` inventory adapter lists the classes and SKOS concepts of an RDF source, so coverage is measured there too.
 
 Extraction no longer maps to the shared levels: `maps_to` moves to stage 4. Old extraction files with `maps_to` still load. Each concept may cite the inventory candidates it covers (`inventory: [ids]`). There is no cap on the number of concepts unless the owner sets `process.max_concepts` for a pilot.
@@ -106,6 +109,8 @@ Extraction no longer maps to the shared levels: `maps_to` moves to stage 4. Old 
 Code proposes candidate pairs between the two extractions from shared inventory references, shared evidence paths and label similarity. The decision port asks of each candidate pair whether both are the same concept (`noul`). Code then matches pairs one-to-one above the threshold.
 
 **Extraction agreement** is the share of matched concepts in the union of both extractions. Unmatched concepts and matched pairs that disagree on category or definition are disputes. An LLM resolves each dispute into a single reconciled extraction and records its reason and the source lines it read: `source: [{path, lines, quote}]`. `reconcile --apply` refuses a resolution whose quote is not at those lines of the analysed commit (`process.resolution_sources: false` only for runs made before the rule). A project whose inventory lists at least an extractor's `min_candidates` needs that extractor too (a third, cross-vendor extraction on large projects); with three or more extractors the report adds **agreement across all extractors**, the share of clusters every extractor found. The reconciled extraction is written to `application/<p>.json`, validated, and ingested through the write route.
+
+Constraints are kept from every extractor, as relations are, their concept ids remapped to the reconciled concepts. Two extractors' constraints with the same modality, the same constrained concepts and the same cited lines are one, kept once: the share of such pairs is the **constraints' agreement**, recorded in `reconciled.constraints`. The match is mechanical on purpose; a looser one is a decision to calibrate first. A term whose concept did not survive is unmarked, and a constraint left constraining nothing is dropped and listed.
 
 ### 4. Mapping
 
@@ -128,13 +133,14 @@ A decision file adds to the decisions before it, so a later run lists only what 
 - on a concept, next to its `support`, `support_kinds: {<ref>: <kind> | {kind, overlap, differs}}` says how a supporting concept relates when it is not simply a specialization (by default specialization, on the task level realization). It changes only a mapping this step added; one made at stage 4 or 6 is changed with `remap`. A concept taken out of `support` loses the mapping this step gave it. The decision, the supporting projects, the families and the reason are recorded per concept. Consolidation never reads the overlay target;
 - `amend: [{ref, reason, alt, add_support, drop_support, support_kinds}]` changes only those fields of a shared concept an earlier decision made: its label, category, definition, status and note stay, and the reason is added to the recorded one. To change the label, category or definition, name the concept again;
 - `remap: [{concept, target, kind, reason, overlap, differs}]` changes the kind of a project concept's mapping made at any stage, and `kind: null` removes it. A partial needs `overlap` and `differs` (§4); the mapping's note keeps the earlier note, marked `Earlier, as <kind>:`, and records the change and its reason. A mapping may not be removed while its concept is in the target's support (`amend` with `drop_support` first);
+- a constraint, shared or in a project file, follows the concepts it names: one that constrains only removed concepts goes with them, a term naming a removed concept is unmarked, and a reference to a concept that moved level moves with it;
 - `settled` and `disputed` say what a partial mapping or a contradiction does to a shared concept (§10). A `settled` entry whose mapping has since gone, or is no longer partial, settles nothing: `consolidate` and `update-check` warn about it, until a later file withdraws it with `unsettled: [{concept, target, reason}]`.
 
 After each file, `support.projects` and `families` of every shared concept are refreshed: the projects of its evidence and of every project concept mapped onto it, as stage 7 counts them.
 
 ### 6. Verification
 
-Every evidence claim is checked: the cited lines are read from the source at the cited commit, and the decision port (or, in llm mode, a model other than the extractor) judges whether they support the claim. The **verified-evidence share** is reported. A claim whose evidence does not hold becomes `disputed` or is removed.
+Every evidence claim (concepts, relations, constraints, variation choices, mappings) is checked: the cited lines are read from the source at the cited commit, and the decision port (or, in llm mode, a model other than the extractor) judges whether they support the claim. The **verified-evidence share** is reported. A claim whose evidence does not hold becomes `disputed` or is removed.
 
 Low-confidence and disputed judgements (mapping kind, category), every `partial` mapping and **every evidence item the decision port judged unsupported** are rechecked by a model other than the one that made them. The default rechecker is `process.recheck` (another vendor, e.g. `{harness: codex, model: …}`); its `fallback` (e.g. the other Claude model) may answer only with a `fallback_reason`, and `verify --apply` refuses any other rechecker. The report counts rechecks by policy and gives the **recheck change rate** per item type, including `mapping-partial`, over the verdicts given in this run's pack; a verdict carried from an earlier pack is counted apart (`carried`), not again.
 
@@ -147,7 +153,7 @@ A mapping is rechecked against the target's shared definition as it is when `ver
 
 A negative judgement that nothing confirmed keeps its evidence and its claim. Such a negative is left unanswered in the recheck, or has no independent rechecker. The evidence gets an `unverified` note, and so does the claim when all its evidence is of that kind. It is listed in `applied.unverified`, and the run report counts it. The recheck may leave these items unanswered; every other recheck item still needs a verdict and a reason.
 
-Every removed claim is recorded in `applied.removed_claims` of `verify/<p>.json`, with its reason and its original form (`restore`). This includes a relation removed because one of its ends was removed: it has `cascade_of` and its own evidence verdicts, since its evidence may have held. A `broader` link to a removed concept is listed in `applied.detached_broader`. A mapping that the recheck changes to another target or kind obeys the rules of `map --apply`: a known target, a kind the preset allows, and for `partial` both `overlap` and `differs` in the verdict's value. They are written into the note, as in stage 4.
+Every removed claim is recorded in `applied.removed_claims` of `verify/<p>.json`, with its reason and its original form (`restore`). This includes a relation removed because one of its ends was removed, and a constraint removed with the concepts it constrains: they have `cascade_of` and their own evidence verdicts, since their evidence may have held. A constraint's term whose concept was removed is unmarked and listed in `applied.detached_terms`. A `broader` link to a removed concept is listed in `applied.detached_broader`. A mapping that the recheck changes to another target or kind obeys the rules of `map --apply`: a known target, a kind the preset allows, and for `partial` both `overlap` and `differs` in the verdict's value. They are written into the note, as in stage 4.
 
 **Verifying again.** `verify --apply` runs once per verification. For claims added or changed afterwards (by a later decision, for example), `ontologizer verify <p> --changed` asks the decision port only about evidence whose claim wording or citation (path, lines, commit, kind) changed. It keeps the earlier judgements of the rest, and `--since <run>` keeps those of another run's verify. In both a full and a `--changed` verify, a recheck verdict given on the same content is carried into the new pack (`carried`) and is not asked again. The earlier answers file is set aside as `<p>.recheck.answers.prev.json`, because its ids are positions in the earlier pack. Then `verify --apply` runs as usual.
 
@@ -157,13 +163,15 @@ An **absence claim** ("the project has no X") requires a recorded protocol: what
 
 Leave-one-out: for each project, the support of every shared concept is recomputed without that project. A concept that keeps support from at least two families under every removal is `stable`. One that drops below with some project removed is `fragile` and names that project. One without enough support even with all projects is `unsupported`, or `unconfirmed` when the frame admitted it below the confirmation threshold.
 
+With constraints, the report adds per project their number by modality, the constraints' agreement, and the **terms without a concept**: what the statements mark `[[?term]]`, for the next extraction to add.
+
 `ontologizer report` collects all metrics below (competency questions with a query run through the engine's `onto_cq_run`; consistency through `onto_reason` as a dry run) and the answer status of every competency question into `report.json` and `report.md`. For each design target it adds a fit matrix: requirements × projects, the concepts to reuse per requirement, and the projects ranked by fit (full = 1, partial = ½, averaged over the assessed requirements). `ontologizer report --compare A B` compares two runs mechanically; when both runs have stage 3 files, it also lists the matched pairs per project that are in both runs, only in A and only in B (what an ablation changed).
 
 **Release comparison.** Two releases built by independent runs name the same concept differently, so ids do not say what was kept. `ontologizer release-compare A B` (from the owner of the shared levels, `--run` the run that built B) reads both releases from the store, proposes candidate pairs across them (TF-IDF top 3 each way, plus equal labels) and has the decision port judge them in batches of 20 pairs (stage `compare`, threshold `compare_same_concept`, by default the grouping one). The accepted pairs give each concept a kind: `kept` (same id), `renamed`, `split`, `merged`, `regrouped`, `dropped` or `added`. An added concept carries its consolidation reason and its review verdict. A dropped one is traced through run B's project concepts: `absorbed` (its counterparts map to B concepts), `rejected` (consolidation or review rejected their group), `one-family`, `project-only`, or `no-run-counterpart`. Both sides carry the nearest candidate below the threshold, release metrics (concepts per level, status, evidence per concept) and the run metrics of B, and of A with `--run-a`. The result is `runs/<B run>/release-compare-A-B.{md,json}`.
 
 ### 8. Review and calibration
 
-`ontologizer review build` writes `review.yaml`. It lists every domain and task concept, with no cap, together with its support, families, stability, verification share and evidence, and every relation of the shared levels. The reviewing agent checks each one in the source and marks it `accept`, `reject` or `revise`. Two things are flagged: `category_differs`, when a supporting project concept has another category (a recheck in stage 6 does not reach the shared concept), and `counterpart: false`, when no project relation stands behind a shared relation.
+`ontologizer review build` writes `review.yaml`. It lists every domain and task concept, with no cap, together with its support, families, stability, verification share and evidence, and every relation of the shared levels. The reviewing agent checks each one in the source and marks it `accept`, `reject` or `revise`. A shared level's constraints are listed too, under `constraints`, and judged as concepts are: a verdict stands while the statement, modality and constrained concepts are unchanged, and a rejected concept takes the constraints that constrain only it along, in the shared files and in the project files. Two things are flagged: `category_differs`, when a supporting project concept has another category (a recheck in stage 6 does not reach the shared concept), and `counterpart: false`, when no project relation stands behind a shared relation.
 
 A project relation `x --t--> y` is a counterpart of the shared relation `A --t--> B` when it has the same type, goes in the same direction, `x` stands for `A` and `y` for `B`. A project concept stands for the shared concept it maps to (any mapping kind), and so does every project concept narrower than it (`broader`, any number of steps). It also stands for every shared concept that one specializes in turn: `broader`, or a `specialization` mapping between shared concepts, any number of steps. A relation between narrower concepts instantiates the relation between the wider ones, never the reverse: an edge of a wider project concept does not count for a narrower shared one. When there is no counterpart, `counterpart_other` lists the project relations between the same ends with another type or in the other direction.
 
@@ -214,6 +222,7 @@ A new family means a new frame, so its approval is asked for again.
 
 **The checks.** Before a release, `ontologizer update-check <base release> --base-run <the run that built it>` holds the working levels to the release. It needs no new source. It blocks on:
 - a concept removed, or a relation gone, with no recorded reason;
+- a constraint of the release gone with no recorded reason (`remove_constraints: [{ref: <level>:constraint/<id>, reason}]` in a consolidation file), unless every concept it constrained was removed with one;
 - a changed concept that none of its judged cited passages supports, judged through the decision port at the cited commits;
 - a competency question that lost its answer since the base run, unless the downgrade is recorded with a reason (below). Give questions a `query:`, so this does not rest on hand-written answers;
 - a new clash, or a report older than the shared levels or the run's `cq.yaml`.
@@ -234,6 +243,22 @@ Then `review build --since <base run>` and the review of what changed, as in §8
 4. the owner's `release`.
 
 **Foreign ontologies.** `import-graph` refuses a file with none of the kit's vocabulary in a graph with a role: the kit would see nothing there, and the write would replace the graph. To analyse such a file, make it a source as above. To keep it verbatim, import it into a graph with no role.
+
+### Constraints
+
+A constraint is what a project guarantees, forbids, permits or says it does not promise, stated in the terms of its concepts. It is a reified claim with its evidence, as a relation is, not an OWL axiom: an invariant is a norm the system may break, and the store holds the project's types, not its runtime state, so there is nothing to check it against. The normative text stays in the source; the ontology keeps the statement, its modality, what it constrains and where it is written, so it can be asked which constraints govern a concept and how projects differ in what they guarantee.
+
+The classification follows SBVR. `modality` is one of `necessity` or `impossibility` (*structural*: it cannot be otherwise by definition), `obligation`, `prohibition` or `permission` (*operative*: it ought to hold and the system could break it), or `non-guarantee` (*boundary*: what the source says is not promised). The kind follows from the modality.
+
+```json
+{"id": "stale-result-rejected", "modality": "prohibition", "source_id": "INV-02", "level": "application",
+ "statement": "a result of a stale [[assignment]] is accepted for its [[job]] after its [[?assignment epoch]] moved on",
+ "constrains": ["assignment"], "evidence": [{"path": "docs/invariants.md", "lines": "12", "kind": "doc"}]}
+```
+
+The statement is the proposition the modality applies to, without the modal words. It is written only in the vocabulary's terms: `[[id]]` or `[[id|words]]` marks a concept (a local id, or `domain:<id>` / `task:<id>`), and every constrained concept is a marked term. The write route checks that every term and every constrained concept is a concept of the validation context, and that the kind follows from the modality. A term the statement needs that has no concept yet is either added as a concept (a value or property → `Quality` or `Mode`, a connection → `Relator`) or marked `[[?term]]`, and reported. Concepts are added when a rule needs them, not upfront; the relation types stay as they are.
+
+Constraints of a shared level are reviewed in stage 8 and checked by `update-check`. Matching constraints across projects (stage 4 and 5) is not part of the process yet.
 
 ## Model roles
 
@@ -282,6 +307,8 @@ Every metric is computed by code from the run directory and is written to `repor
 | Competency-question coverage | questions answered ÷ questions; `partial` and `unanswered` are listed by id | 7 |
 | Consistency clashes | contradictions the engine's reasoner finds over the store (`onto_reason`, RDFS, dry run); releases have their own IRIs, so a clash lies inside one version | 7 |
 | Target fit (per target, per project) | mean over the target's assessed requirements of full = 1, partial = ½, none = 0 | 7 |
+| Constraints' agreement | constraints two extractors state alike (modality, constrained concepts, cited lines) ÷ (constraints of A + of B − alike); only with constraints | 3, 7 |
+| Terms without a concept | distinct `[[?term]]` marks in a project's constraints; only with constraints | 7 |
 
 The report also records, per stage, the decision mode and the number of decisions, and for every extraction its harness, model and run id. When no cross-harness result is present, the report says that the run used Claude models only.
 

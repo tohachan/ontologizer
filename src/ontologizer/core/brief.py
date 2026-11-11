@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ontologizer.core.constraints import remap
 from ontologizer.core.frame import Frame
 from ontologizer.core.levels import RELATION_TYPES, Preset
 from ontologizer.core.run import Run, load_json
@@ -90,6 +91,7 @@ def render(run: Run, frame: Frame, project: str, ex_id: str, part: int | None = 
                           "documentation and the code structure; leave `inventory` empty.")
         inventory_block = ""
     variation_block = _variation_block(frame)
+    constraint_block = _constraint_block(frame, separate=bool(variation_block))
     domains = "; ".join(f"**{d['label']}**: {d['boundary']}" for d in frame.h.get("domains", []))
     cap = run.max_concepts
     cmd = f"uv run --project {KIT_ROOT} ontologizer validate {output_path(run, project, ex_id, part)}"
@@ -100,6 +102,7 @@ def render(run: Run, frame: Frame, project: str, ex_id: str, part: int | None = 
         or "nothing listed", never_read=_never_read(run, frame, src["dir"]),
         commit=src["commit"] or "<unknown: report it>", source_dir=src["dir"] or "<unknown: report it>",
         inventory_line=inventory_line, inventory_block=inventory_block, variation_block=variation_block,
+        constraint_block=constraint_block,
         cap_line=f"Extract at most {cap} concepts (pilot cap)." if cap else "There is no cap on the number of concepts.",
         categories=", ".join(f"`{c}`" for c in preset.categories), relation_types=", ".join(RELATION_TYPES),
         output=output_path(run, project, ex_id, part), harness=ex.get("harness", "claude"),
@@ -133,6 +136,34 @@ def _variation_block(frame: Frame) -> str:
             "guessing.\n\n" + "\n".join(rows))
 
 
+def _constraint_block(frame: Frame, separate: bool) -> str:
+    """Asked only when the frame says what counts as a constraint: a study that does not is not asked."""
+    c = frame.constraints
+    if not c:
+        return ""
+    from ontologizer.core.constraints import MODALITIES
+    by_kind: dict[str, list[str]] = {}
+    for m, k in MODALITIES.items():
+        by_kind.setdefault(k, []).append(f"`{m}`")
+    kinds = "; ".join(f"{k}: {', '.join(ms)}" for k, ms in by_kind.items())
+    return (("\n\n" if separate else "") +
+            f"**Constraints.** The study collects constraints: {c['scope'].strip()} Add each to `constraints` "
+            "(they go there, not into `caveats`): `{\"id\", \"statement\", \"modality\", \"constrains\", "
+            "\"level\": \"application\", \"source_id\", \"evidence\": [...], \"status\", \"note\"}`.\n"
+            "- `statement`: the proposition the modality applies to, one English sentence in the source's own sense, "
+            "without the modal words (a prohibition states what must not happen, a non-guarantee what is not "
+            "promised), with every term that is a concept marked:`[[concept-id]]`, or `[[concept-id|words]]` to keep the sentence readable. "
+            "A term the statement needs that is not one of your concepts: add the concept when the source defines a "
+            "thing behind it (a value or a property of something → `Quality` or `Mode`, a connection → `Relator`); "
+            "otherwise mark it `[[?term]]`, so it is reported as a term without a concept.\n"
+            f"- `modality`: {kinds}. Structural: it cannot be otherwise by definition. Operative: it ought to hold "
+            "and the system could break it. Boundary (`non-guarantee`): what the source says is not promised.\n"
+            "- `constrains`: the ids of the concepts the constraint is about, each marked in the statement.\n"
+            "- `source_id`: the identifier the source gives it, when it has one (a requirement or invariant id).\n"
+            "- `evidence`: the lines that state it, as for concepts. A constraint is what the source states, not "
+            "what you infer from the design.")
+
+
 def write_briefs(run: Run, frame: Frame, project: str, ex_id: str, parts: int = 1) -> list[Path]:
     out = []
     if parts <= 1:
@@ -159,8 +190,12 @@ def load_extraction(run: Run, project: str, ex_id: str) -> dict | None:
     if not parts:
         return None
     docs = [json.loads(p.read_text()) for p in parts]
-    merged = {k: v for k, v in docs[0].items() if k not in ("concepts", "relations", "absences", "caveats", "variation")}
+    merged = {k: v for k, v in docs[0].items() if k not in ("concepts", "relations", "absences", "caveats", "variation",
+                                                            "constraints")}
     merged.update(concepts=[], relations=[], absences=[], caveats=[], variation=[])
+    if any(d.get("constraints") for d in docs):
+        merged["constraints"] = []
+    kseen: set[str] = set()
     seen: set[str] = set()
     for d in docs:
         start = len(merged["concepts"])
@@ -180,6 +215,15 @@ def load_extraction(run: Run, project: str, ex_id: str) -> dict | None:
                 c["broader"] = [rename.get(b, b) for b in c["broader"]]
         for r in d.get("relations", []):
             merged["relations"].append({**r, "from": rename.get(r["from"], r["from"]), "to": rename.get(r["to"], r["to"])})
+        for k in d.get("constraints", []):
+            k, _ = remap(k, lambda r: rename.get(r, r))
+            if k is None:
+                continue
+            kid, n = k["id"], 2
+            while kid in kseen:
+                kid, n = f"{k['id']}-{n}", n + 1
+            kseen.add(kid)
+            merged["constraints"].append({**k, "id": kid})
         merged["absences"] += d.get("absences", [])
         merged["caveats"] += d.get("caveats", [])
         merged["variation"] += [v for v in d.get("variation", []) if v not in merged["variation"]]

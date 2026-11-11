@@ -86,6 +86,9 @@ export type EntityDetail = {
     variation: { dimension: string; value: string; status: string | null; note: string | null; evidence: Evidence[] }[] };
   candidates?: { id: string; type: string; status: string | null; candidateLabel: string | null; candidateLevel: string | null;
                  evidence: Evidence[] }[];
+  constraints?: { record: string; graph: string; statement: string; modality: string; kind: string | null;
+                  constrains: string[]; terms: string[]; candidateTerms: string[]; sourceId: string | null;
+                  status: string | null; note: string | null; evidence: Evidence[]; role: 'constrains' | 'term' }[];
   statements: { graph: string; predicate: string; object: Term }[]; statementsOmitted: number;
 };
 export type RelationshipDetail = {

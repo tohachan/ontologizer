@@ -5,6 +5,8 @@ Usage: ontologizer consolidate DECISIONS.yaml  (shared-level and application fil
 - adds the new shared domain/task concepts (evidence = supporting project concepts); a concept
   decided on another level than before moves there, and mappings to it follow;
 - removes what `removed:` names ({ref, reason, replaced_by}), with its relations and the mappings to it;
+  a constraint (shared or project) constraining only removed concepts goes too, a term naming one is unmarked,
+  and a reference to a concept that moved level follows it;
 - adds relations to those of earlier decisions, on the level of their `from` end. An end is a concept
   id, or `domain:<id>` / `task:<id>` when the id exists on both levels. `remove_relations:`
   ({relation: [from, type, to], reason}) takes relations out;
@@ -36,6 +38,8 @@ import sys
 from pathlib import Path
 
 import yaml
+
+from ontologizer.core.constraints import prune as prune_constraints
 
 NOTE = "bound in step 3 consolidation"
 ADDED = "added in step 3 consolidation as support for"
@@ -132,10 +136,18 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
     task_ids, domain_ids = ids["task"], ids["domain"]
     rels = [r for doc in shared.values() for r in doc.get("relations", [])]
     _rebind_shared(shared, gone, moved)
+    k_gone = k_changed = 0
+    for level, doc in shared.items():
+        if doc.get("constraints"):
+            kept, g_, c_ = prune_constraints(doc["constraints"], lambda r, lv=level: _follow_ref(r, lv, gone, moved))
+            doc["constraints"], k_gone, k_changed = kept, k_gone + len(g_), k_changed + len(c_)
 
     # rebind candidates
     rebound = added = unbound = 0
     for p, (f, d) in extractions.items():
+        if d.get("constraints"):     # a project constraint naming a removed or moved shared concept follows it
+            kept, g_, c_ = prune_constraints(d["constraints"], lambda r: _follow_ref(r, None, gone, moved))
+            d["constraints"], k_gone, k_changed = kept, k_gone + len(g_), k_changed + len(c_)
         for c in d["concepts"]:
             c_maps = c.get("maps_to", [])
             kept = [m for m in c_maps if m.get("target") not in gone]
@@ -198,6 +210,8 @@ def apply(decision_file: str | Path, seeds: dict[str, Path], extractions_dir: Pa
     print(f"domain concepts {len(domain_ids)}, task concepts {len(task_ids)}, relations {len(rels)}; "
           f"rebound {rebound} candidates, added {added} mappings, {left} single-project candidates left"
           + (f"; removed {len(gone)} concepts, {unbound} mappings" if gone or unbound else "")
+          + (f"; constraints: {k_gone} removed with their concepts, {k_changed} with references changed"
+             if k_gone or k_changed else "")
           + (f"; moved {len(moved)} concepts across levels" if moved else "")
           + (f"; amended {len(amends)} concepts" if amends else "")
           + (f"; changed {remapped} earlier mappings" if remapped else ""))
@@ -482,6 +496,22 @@ def _relations(dec: dict, shared: dict, ids: dict[str, set[str]], gone: set[str]
         if out[level] or "relations" in doc:
             doc["relations"] = out[level]
     return []
+
+
+def _follow_ref(ref: str, level: str | None, gone: set[str], moved: set[tuple[str, str]]) -> str | None:
+    """A constraint's reference after this step: None when its concept is removed, the other level when it
+    moved. `level`: the shared level whose file holds the constraint (its local ids are of that level), or None
+    for a project file (only prefixed references name shared concepts)."""
+    if ":" not in ref and level is None:
+        return ref
+    lv, cid = ref.partition(":")[::2] if ":" in ref else (level, ref)
+    if lv == "local" and level is not None:
+        lv = level
+    if f"{lv}:{cid}" in gone:
+        return None
+    if (cid, lv) in moved:
+        lv = "task" if lv == "domain" else "domain"
+    return cid if lv == level else f"{lv}:{cid}"
 
 
 def _rebind_shared(shared: dict, gone: set[str], moved: set[tuple[str, str]]) -> None:

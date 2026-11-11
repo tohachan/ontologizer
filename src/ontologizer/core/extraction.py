@@ -27,6 +27,10 @@ Document shape (all keys except `graph` and `concepts` optional):
   "relations": [{"from": "session", "to": "worktree", "type": "uses",
                  "label": "runs in", "evidence": [...], "status": "hypothesis",
                  "inventory": ["<property id it carries>"]}],
+  "constraints": [{"id": "stale-result-rejected", "modality": "prohibition",
+                   "statement": "a result of a stale [[assignment]] is accepted for its [[job]]",
+                   "constrains": ["assignment"], "level": "application", "source_id": "INV-02",
+                   "evidence": [...], "status": "hypothesis", "note": "...", "inventory": [...]}],
   "caveats": ["text", {"text": "...", "evidence": [...], "inventory": ["<shape or individual id>"]}],
   "dimensions": [{"id": "state-location", "label": "...", "definition": "...",
                   "values": [{"id": "database", "label": "...", "definition": "..."}]}],
@@ -41,6 +45,12 @@ Target prefixes: the keys of `shared:` in the owner's config (e.g. `domain:`,
 `local:` or no prefix (same graph), or a full IRI. Variation choices need a
 `variation` entry in `shared:`.
 
+A constraint (`core/constraints.py`) is a guarantee, prohibition, permission or non-guarantee of the project.
+`modality` is one of necessity, impossibility (structural), obligation, prohibition, permission (operative) or
+non-guarantee (boundary); `kind` follows from it and may be left out. The statement marks its terms:
+`[[id]]` or `[[id|text]]` for a concept, `[[?text]]` for a term with no concept yet. Every id in
+`constrains` is a marked term. The section is optional: without it nothing in the graph changes.
+
 Since the staged process (docs/process.md), extraction (stage 2) leaves
 `maps_to` out: mapping is stage 4. Files with `maps_to` still load. `extractor`,
 `inventory` and `absences` are process metadata and are not converted to RDF.
@@ -54,6 +64,7 @@ import re
 
 from rdflib import OWL, RDF, RDFS, SKOS, XSD, Graph, Literal, Namespace, URIRef
 
+from ontologizer.core import constraints as constraint_terms
 from ontologizer.core.config import GUFO, KIT, Config
 from ontologizer.core.levels import (EVIDENCE_KINDS, MAPPING_KINDS, RELATION_TYPES, STATUSES,
                                      Preset, level_iri)
@@ -134,6 +145,7 @@ def validate(doc: dict, preset: Preset, max_concepts: int | None = None) -> list
             errs.append(f"{where}.type: one of {RELATION_TYPES}")
         errs += _validate_evidence(r.get("evidence", []), where, doc, required=False)
         errs += _validate_inventory(r, where)
+    errs += _validate_constraints(doc, ids, preset, is_project)
     for key in ("caveats", "absences"):
         for i, c in enumerate(doc.get(key, [])):
             if key == "caveats" and isinstance(c, dict) and not str(c.get("text", "")).strip():
@@ -155,6 +167,57 @@ def validate(doc: dict, preset: Preset, max_concepts: int | None = None) -> list
             errs.append(f"{where}.evidence: required")
         errs += _validate_evidence(v.get("evidence", []), where, doc, required=True)
         _ = dim_ids
+    return errs
+
+
+def _validate_constraints(doc: dict, ids: set, preset: Preset, is_project: bool) -> list[str]:
+    errs: list[str] = []
+    seen: set[str] = set()
+    ks = doc.get("constraints", [])
+    if not isinstance(ks, list):
+        return ["constraints: a list"]
+    for i, k in enumerate(ks):
+        where = f"constraints[{i}]({k.get('id') if isinstance(k, dict) else '?'})"
+        if not isinstance(k, dict):
+            errs.append(f"{where}: an object")
+            continue
+        if not SLUG.match(str(k.get("id", ""))):
+            errs.append(f"{where}.id: lowercase slug required")
+        elif k["id"] in seen:
+            errs.append(f"{where}.id: duplicate")
+        seen.add(k.get("id"))
+        st = k.get("statement")
+        if not isinstance(st, str) or not st.strip():
+            errs.append(f"{where}.statement: required")
+            st = ""
+        errs += [f"{where}.statement: {e}" for e in constraint_terms.markup_errors(st)]
+        if k.get("modality") not in constraint_terms.MODALITIES:
+            errs.append(f"{where}.modality: one of {tuple(constraint_terms.MODALITIES)}")
+        elif k.get("kind") is not None and k["kind"] != constraint_terms.MODALITIES[k["modality"]]:
+            errs.append(f"{where}.kind: {k['modality']} is {constraint_terms.MODALITIES[k['modality']]}, not "
+                        f"{k['kind']!r} (the kind follows from the modality; it may be left out)")
+        marked = constraint_terms.refs(st)
+        for ref in marked:
+            if ref not in ids and ":" not in ref:
+                errs.append(f"{where}.statement: [[{ref}]] is not a concept of this file; mark a term without a "
+                            f"concept as [[?...]]")
+        cons = k.get("constrains")
+        if not isinstance(cons, list) or not cons or not all(isinstance(x, str) and x for x in cons):
+            errs.append(f"{where}.constrains: at least one concept id")
+        else:
+            for ref in cons:
+                if ref not in ids and ":" not in ref:
+                    errs.append(f"{where}.constrains: unknown concept {ref!r}")
+                elif ref not in marked:
+                    errs.append(f"{where}.constrains: {ref!r} is not a marked term of the statement ([[{ref}]])")
+        if k.get("level") not in preset.level_ids:
+            errs.append(f"{where}.level: one of {preset.level_ids}")
+        if k.get("status", "hypothesis") not in STATUSES:
+            errs.append(f"{where}.status: one of {STATUSES}")
+        if k.get("source_id") is not None and not str(k["source_id"]).strip():
+            errs.append(f"{where}.source_id: a non-empty identifier when present")
+        errs += _validate_evidence(k.get("evidence", []), where, doc, required=is_project)
+        errs += _validate_inventory(k, where)
     return errs
 
 
@@ -301,6 +364,29 @@ def to_graph(doc: dict, cfg: Config, preset: Preset) -> Graph:
             g.add((rid, RDFS.label, lit(r["label"])))
         status(rid, r.get("status"))
         evidence(rid, r.get("evidence", []))
+
+    labels = {c["id"]: c["label"] for c in doc.get("concepts", [])}
+    for k in doc.get("constraints", []):
+        kid = URIRef(f"{ns}constraint/{k['id']}")
+        g.add((kid, RDF.type, OK.Constraint))
+        g.add((kid, OK.statement, lit(constraint_terms.plain(k["statement"], labels.get))))
+        g.add((kid, OK.modality, OK[constraint_terms.MODALITY_TERMS[k["modality"]]]))
+        g.add((kid, OK.constraintKind, OK[constraint_terms.KIND_TERMS[constraint_terms.MODALITIES[k["modality"]]]]))
+        for ref in k["constrains"]:
+            g.add((kid, OK.constrains, term(ref)))
+        for ref in constraint_terms.refs(k["statement"]):
+            g.add((kid, OK.usesTerm, term(ref)))
+        for text in constraint_terms.candidates(k["statement"]):
+            g.add((kid, OK.candidateTerm, lit(text)))
+        g.add((kid, OK.level, URIRef(level_iri(k["level"]))))
+        if k.get("source_id"):
+            g.add((kid, OK.sourceIdentifier, Literal(str(k["source_id"]).strip())))
+        if k.get("note"):
+            g.add((kid, OK.note, lit(k["note"])))
+        if project_iri is not None:
+            g.add((kid, OK.inProject, project_iri))
+        status(kid, k.get("status"))
+        evidence(kid, k.get("evidence", []))
 
     for d in doc.get("dimensions", []):
         dim = URIRef(ns + "dimension/" + d["id"])

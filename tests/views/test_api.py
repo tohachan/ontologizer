@@ -479,3 +479,26 @@ def test_a_mapping_into_a_release_the_store_lacks_still_names_it(tmp_path):
     assert status == 200, body
     assert body["scopeFacts"]["outside"] == [{"graph": "shared/domain@0.3", "kind": "kit-mapping", "relationships": 1,
                                               "available": False, "instead": "shared/domain"}]
+
+
+def test_the_inspector_gets_the_constraints_of_a_concept(tmp_path):
+    hub = make_hub(tmp_path, {"study": "../study"})
+    make_study(tmp_path)
+    extra = TRIG + f"""
+<{G}shared/domain> {{
+  <{D}constraint/once> a ok:Constraint ; ok:statement "an Order is paid once"@en ; ok:modality ok:necessity ;
+      ok:constraintKind ok:structuralRule ; ok:constrains <{D}Order> ; ok:usesTerm <{D}Order> , <{D}Item> ;
+      ok:candidateTerm "payment attempt"@en ; ok:sourceIdentifier "INV-01" ; ok:status ok:hypothesis .
+  <{D}constraint/broken> a ok:Constraint ; ok:constrains <{D}Order> .
+}}"""
+    app = Visualizer(Owners(hub), ScopedReader(RowEngine(extra)), Settings(allowed_hosts=(HOST,)))
+    out = compile_(app)[1]
+    nodes = {n["label"]: n for n in out["diagram"]["nodes"]}
+    assert not any("constraint/" in m for n in out["diagram"]["nodes"] for m in n["members"])   # never a node
+    (order,) = call(app, "GET", f"compilations/{out['compileId']}/elements/{nodes['Order']['id']}")[1]["entities"]
+    (k,) = order["constraints"]                     # the record without a statement is left out, not shown broken
+    assert k["statement"] == "an Order is paid once" and k["role"] == "constrains" and k["sourceId"] == "INV-01"
+    assert k["candidateTerms"] == ["payment attempt"] and k["modality"].endswith("necessity")
+    if "Item" in nodes:
+        (item,) = call(app, "GET", f"compilations/{out['compileId']}/elements/{nodes['Item']['id']}")[1]["entities"]
+        assert [c["role"] for c in item["constraints"]] == ["term"]

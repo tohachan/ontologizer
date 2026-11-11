@@ -87,6 +87,17 @@ function EntityView({ e }: { e: EntityDetail }) {
           ))}</ul>
         </>
       )}
+      {e.constraints && e.constraints.length > 0 && (
+        <>
+          <h3>Constraints</h3>
+          <ul aria-label="constraints">{e.constraints.map((k) => (
+            <li key={k.record}><span className="tag">{localName(k.modality)}</span> {k.statement}{k.sourceId && <span className="tag">{k.sourceId}</span>} {statusText(k.status)}
+              {k.role === 'term' && <span className="muted"> (names it; constrains {k.constrains.map(localName).join(', ')})</span>}
+              {k.candidateTerms.length > 0 && <div className="muted small">terms without a concept: {k.candidateTerms.join(', ')}</div>}
+              <EvidenceList items={k.evidence} /></li>
+          ))}</ul>
+        </>
+      )}
       {e.project && typeof e.project === 'object' && (
         <>
           <h3>Project</h3>

@@ -6,12 +6,12 @@
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 @prefix prov: <http://www.w3.org/ns/prov#> .
 
-# Kit vocabulary: levels, provenance, mappings, relations, variation, views.
+# Kit vocabulary: levels, provenance, mappings, relations, constraints, variation, views.
 # Knows nothing about any concrete project or domain.
 
 <urn:ontologizer:kit> a owl:Ontology ;
     rdfs:label "ontologizer kit vocabulary"@en ;
-    owl:versionInfo "0.1.0" .
+    owl:versionInfo "0.2.0" .
 
 ## Levels ------------------------------------------------------------------
 ok:Level a owl:Class ; rdfs:label "Level"@en ;
@@ -87,6 +87,36 @@ ok:triggers     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:pref
 ok:hasPhase     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "has phase"@en .
 ok:associatedWith a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "associated with"@en .
 ok:precedes     a skos:Concept ; skos:inScheme ok:RelationTypeScheme ; skos:prefLabel "precedes"@en .
+
+## Constraints -------------------------------------------------------------
+ok:Constraint a owl:Class ; rdfs:label "Constraint"@en ;
+    rdfs:comment "Reified claim that a project guarantees, forbids, permits or does not promise something, stated in the terms of its concepts. A norm with its evidence, not an OWL axiom: a system may break it."@en .
+ok:statement a owl:DatatypeProperty ; rdfs:domain ok:Constraint ;
+    rdfs:comment "The constraint as prose; its terms are the concepts in ok:usesTerm."@en .
+ok:constrains a owl:ObjectProperty ; rdfs:domain ok:Constraint ; rdfs:range ok:Concept ;
+    rdfs:comment "A concept the constraint is about. Every constrained concept is also a term of the statement."@en .
+ok:usesTerm a owl:ObjectProperty ; rdfs:domain ok:Constraint ; rdfs:range ok:Concept ;
+    rdfs:comment "A concept the statement names."@en .
+ok:candidateTerm a owl:DatatypeProperty ; rdfs:domain ok:Constraint ;
+    rdfs:comment "A term the statement needs that has no concept yet."@en .
+ok:sourceIdentifier a owl:DatatypeProperty ; rdfs:domain ok:Constraint ;
+    rdfs:comment "The identifier the source gives the constraint (e.g. a requirement id)."@en .
+ok:modality a owl:ObjectProperty ; rdfs:domain ok:Constraint ; rdfs:range skos:Concept .
+ok:constraintKind a owl:ObjectProperty ; rdfs:domain ok:Constraint ; rdfs:range skos:Concept .
+ok:ConstraintKindScheme a skos:ConceptScheme ; skos:prefLabel "Constraint kind"@en .
+ok:structuralRule  a skos:Concept ; skos:inScheme ok:ConstraintKindScheme ; skos:prefLabel "structural"@en ;
+    skos:definition "Alethic: it cannot be otherwise (SBVR definitional rule)."@en .
+ok:operativeRule   a skos:Concept ; skos:inScheme ok:ConstraintKindScheme ; skos:prefLabel "operative"@en ;
+    skos:definition "Deontic: it ought to hold and can be broken (SBVR behavioural rule)."@en .
+ok:promiseBoundary a skos:Concept ; skos:inScheme ok:ConstraintKindScheme ; skos:prefLabel "boundary"@en ;
+    skos:definition "What the project says it does not promise."@en .
+ok:ModalityScheme a skos:ConceptScheme ; skos:prefLabel "Constraint modality"@en .
+ok:necessity     a skos:Concept ; skos:inScheme ok:ModalityScheme ; skos:prefLabel "necessity"@en ; skos:broader ok:structuralRule .
+ok:impossibility a skos:Concept ; skos:inScheme ok:ModalityScheme ; skos:prefLabel "impossibility"@en ; skos:broader ok:structuralRule .
+ok:obligation    a skos:Concept ; skos:inScheme ok:ModalityScheme ; skos:prefLabel "obligation"@en ; skos:broader ok:operativeRule .
+ok:prohibition   a skos:Concept ; skos:inScheme ok:ModalityScheme ; skos:prefLabel "prohibition"@en ; skos:broader ok:operativeRule .
+ok:permission    a skos:Concept ; skos:inScheme ok:ModalityScheme ; skos:prefLabel "permission"@en ; skos:broader ok:operativeRule .
+ok:nonGuarantee  a skos:Concept ; skos:inScheme ok:ModalityScheme ; skos:prefLabel "non-guarantee"@en ; skos:broader ok:promiseBoundary .
 
 ## Variation points --------------------------------------------------------
 ok:VariationDimension a owl:Class ; rdfs:subClassOf skos:ConceptScheme ; rdfs:label "Variation dimension"@en .

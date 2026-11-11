@@ -313,6 +313,7 @@ The initial reader must understand the kit's modeling conventions, not just OWL 
 | Mapping with `ok:candidateLabel` but no target | Unresolved candidate shown in the inspector; do not invent a target IRI |
 | `rdfs:domain` and `rdfs:range` of a property | Source statements in the inspector; no edge in the first release |
 | `ok:VariationDimension`, `ok:VariationValue`, `ok:VariationChoice` | Attributes of the choice's project, in the inspector; no node |
+| `ok:Constraint` | Listed in the inspector of every concept it constrains or names (`role`: constrains or term), with its modality, statement, terms without a concept and evidence; no node, and not part of a saved view's baseline |
 | Whitelisted explicit entity predicates | RDF assertion edge with the original predicate |
 | `ok:evidence` and source fields | Inspector evidence records, not ordinary concept nodes |
 

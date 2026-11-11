@@ -66,6 +66,22 @@ class VariationChoice:
 
 
 @dataclass(frozen=True)
+class Constraint:
+    record: str
+    graph: str
+    statement: str
+    modality: str                  # IRI of the kit modality
+    kind: str | None               # IRI of the kit constraint kind
+    constrains: tuple[str, ...]
+    terms: tuple[str, ...]         # concepts the statement names
+    candidate_terms: tuple[str, ...]
+    source_id: str | None
+    status: str | None
+    note: str | None
+    evidence: tuple[Evidence, ...]
+
+
+@dataclass(frozen=True)
 class Project:
     iri: str
     labels: tuple[Label, ...]
@@ -90,3 +106,4 @@ class SourceModel:
     candidates: tuple[Relationship, ...]           # mappings with only a candidate label
     projects: Mapping[str, Project]
     diagnostics: tuple[Diagnostic, ...]
+    constraints: tuple[Constraint, ...] = ()       # by record IRI; not nodes of a view

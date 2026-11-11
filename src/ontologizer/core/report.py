@@ -297,6 +297,8 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
         if app:
             row["concepts"] = len(app["concepts"])
             row["mapped"] = sum(1 for c in app["concepts"] if c.get("maps_to"))
+            if app.get("constraints"):
+                row["constraints"] = _constraint_row(app)
         per[p] = row
     st = stability(run, frame)   # recomputed: mappings may have changed since the last `stability`
     cqs = _cq_status(run, frame, engine)
@@ -326,6 +328,12 @@ def report(run: Run, frame: Frame, engine=None) -> dict:
         "loo_stability": st["stable_share"],
         "cq_coverage": round(answered / len(cqs), 3) if cqs else None,
     }
+    krows = {p: r["constraints"] for p, r in per.items() if r.get("constraints")}
+    if krows:
+        ag = [r["agreement"] for r in krows.values() if r.get("agreement") is not None]
+        metrics["constraints"] = {"total": sum(r["count"] for r in krows.values()),
+                                  "agreement": round(sum(ag) / len(ag), 3) if ag else None,
+                                  "terms_without_concepts": sum(len(r["terms_without_concepts"]) for r in krows.values())}
     cons = consistency(engine)
     metrics["consistency_clashes"] = cons.get("clashes") if cons and "clashes" in cons else None
     doc = {"run": run.id, "at": now(), "study": frame.h.get("study"), "projects": projects,
@@ -352,6 +360,21 @@ def _fmt(v) -> str:
     return str(v)
 
 
+def _constraint_row(app: dict) -> dict:
+    """A project's constraints: how many, by modality, the extractors' agreement on them (stage 3), and the
+    terms their statements need that have no concept yet (`[[?term]]`): what the next extraction should add."""
+    from ontologizer.core.constraints import candidates
+    ks = app["constraints"]
+    by: dict[str, int] = {}
+    for k in ks:
+        by[k["modality"]] = by.get(k["modality"], 0) + 1
+    terms = sorted({t for k in ks for t in candidates(k.get("statement", ""))})
+    return {"count": len(ks), "by_modality": dict(sorted(by.items())),
+            "agreement": ((app.get("reconciled") or {}).get("constraints") or {}).get("agreement"),
+            "constrained_concepts": len({c for k in ks for c in k.get("constrains", [])}),
+            "terms_without_concepts": terms}
+
+
 def _coverage_by_kind(cands: list[dict], app: dict) -> dict[str, dict]:
     """Per inventory kind: candidates `listed` in an `inventory` field of the extraction (a concept for types and
     concepts; a concept, relation, caveat or absence for the others), those only `cited_only` (no list names them,
@@ -373,7 +396,7 @@ def _coverage_by_kind(cands: list[dict], app: dict) -> dict[str, dict]:
         elif isinstance(o, list):
             for v in o:
                 walk(v)
-    walk({k: app.get(k) for k in ("concepts", "relations", "caveats", "absences", "variation")})
+    walk({k: app.get(k) for k in ("concepts", "relations", "caveats", "absences", "variation", "constraints")})
     out: dict[str, dict] = {}
     for c in cands:
         k = c.get("kind") or "other"
@@ -457,6 +480,19 @@ def render(doc: dict) -> str:
                 ids = ", ".join(f"`{i}`" for i in x["missing_ids"][:12]) + (" …" if len(x["missing_ids"]) > 12 else "")
                 lines.append(f"| {p} | {k} | {x['counted']} | {x['listed']} | {x['cited_only']} | {x['missing']} | "
                              f"{ids or '—'} |")
+    krows = {p: (doc["per_project"].get(p) or {}).get("constraints") for p in doc["projects"]}
+    if any(krows.values()):
+        lines += ["", "## Constraints", "",
+                  "Agreement: the share of constraints two extractors stated alike (stage 3). Terms without a concept: "
+                  "what the statements mark as `[[?term]]`.", "",
+                  "| Project | Constraints | By modality | Concepts constrained | Agreement | Terms without a concept |",
+                  "| --- | --- | --- | --- | --- | --- |"]
+        for p, k in krows.items():
+            if not k:
+                continue
+            terms = ", ".join(k["terms_without_concepts"][:12]) + (" …" if len(k["terms_without_concepts"]) > 12 else "")
+            lines.append(f"| {p} | {k['count']} | {', '.join(f'{m} {n}' for m, n in k['by_modality'].items())} | "
+                         f"{k['constrained_concepts']} | {_fmt(k.get('agreement'))} | {terms or '—'} |")
     lines += ["", "## Shared concepts", "", "| Concept | Level | Mark | Families | Projects |", "| --- | --- | --- | --- | --- |"]
     for ref, s in sorted(doc["shared"].items()):
         lines.append(f"| {s['label']} (`{ref}`) | {s['level']} | {s['mark']} | {', '.join(s['families'])} | "
